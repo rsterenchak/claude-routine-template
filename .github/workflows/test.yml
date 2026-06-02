@@ -1,0 +1,60 @@
+name: Tests
+
+# ─────────────────────────────────────────────────────────────────
+# TEMPLATE INSTANTIATION NOTES
+# Fill in the project-specific bits:
+#
+#   1. WORKING_DIR (appears below as `{{WORKING_DIR}}`): the path from the
+#      repo root to where package.json lives.
+#      Examples:
+#        - "."           — package.json is at the repo root
+#        - "app"         — package.json is in app/
+#        - "toDoList_main" — like the canonical example
+#      If package.json is at the root, set this to "." AND delete the
+#      working-directory and cache-dependency-path lines.
+#
+#   2. TEST_COMMAND: change `npm run test:run` to whatever this project uses.
+#      Common variants:
+#        - npm test            (default in many node projects)
+#        - npm run test:ci     (when there's a separate CI variant)
+#        - vitest run          (vitest projects bypassing npm scripts)
+#        - jest --ci           (jest equivalent)
+#        - pnpm test, yarn test, etc.
+#
+#   3. NODE VERSION: currently '24'. Adjust if the project requires a
+#      different Node version. Check package.json's `engines.node` field
+#      if present; otherwise use 20 LTS for safety.
+#
+#   4. Delete this comment block once the file is filled in.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+  pull_request:
+    paths-ignore:
+      - 'TODO.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: {{WORKING_DIR}}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: {{WORKING_DIR}}
+        run: npm install
+
+      - name: Run tests
+        working-directory: {{WORKING_DIR}}
+        run: npm run test:run

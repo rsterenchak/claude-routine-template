@@ -1,0 +1,93 @@
+name: Deploy
+
+# ─────────────────────────────────────────────────────────────────
+# TEMPLATE INSTANTIATION NOTES
+# This file has the most project-specific content of the three workflows.
+# Fill in the project-specific bits:
+#
+#   1. WORKING_DIR (appears as `{{WORKING_DIR}}`): same as test.yml — where
+#      package.json lives. Examples: ".", "app", "toDoList_main".
+#      If package.json is at the root, set this to "." AND delete every
+#      `working-directory:` line below.
+#
+#   2. BUILD_COMMAND: currently `npm run build`. Adjust if your build script
+#      has a different name (e.g. `npm run build:prod`, `vite build`,
+#      `next build`).
+#
+#   3. BUILD ENV SECRETS: the example below shows GOOGLE_OAUTH_CLIENT_ID
+#      because the canonical project (toDoList_TOP) needs it. Replace the
+#      `env:` block under the Build step with whatever secrets THIS project
+#      needs at build time. If none are needed, delete the `env:` block.
+#
+#   4. DEPLOY STEP: the example below uses GitHub Pages via peaceiris's
+#      action. Swap to whatever target this project deploys to:
+#
+#      - GitHub Pages (current example) — keep as-is, ensure the repo has
+#        Pages enabled (Settings → Pages → Source: gh-pages branch).
+#      - Cloudflare Pages — use `cloudflare/pages-action@v1` with `apiToken`,
+#        `accountId`, `projectName` inputs.
+#      - Vercel — use `amondnet/vercel-action@v25` with `vercel-token` etc.
+#      - Netlify — use `nwtgck/actions-netlify@v3` with netlify auth secrets.
+#      - No deployment (library, internal-only) — DELETE the entire
+#        "Deploy to..." step. Build still runs to verify it works.
+#
+#   5. MANIFEST GENERATION STEP — LEAVE THIS IN PLACE.
+#      It generates `dist/src-manifest.json` which the in-app Claude
+#      assistant fetches to populate the file picker. Without it, the
+#      assistant can't list files for this repo. The only adjustment needed
+#      is the script path (`scripts/gen-src-manifest.js` or `.cjs`).
+#      Pick based on whether package.json has "type": "module":
+#        - "type": "module" present → use .cjs
+#        - No "type" field or "type": "commonjs" → use .js
+#
+#   6. Delete this comment block once the file is filled in.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'TODO.md'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: {{WORKING_DIR}}
+
+      - name: Build
+        run: npm run build
+        working-directory: {{WORKING_DIR}}
+        env:
+          # Replace with secrets THIS project needs at build time. Delete
+          # the env: block entirely if no secrets are needed.
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+
+      - name: Generate source manifest
+        # Picks the file inventory the in-app Claude assistant uses for its
+        # file picker. LEAVE THIS STEP IN. Adjust the script path only:
+        # .js for CommonJS projects, .cjs for ESM projects (when
+        # package.json has "type": "module").
+        run: node scripts/gen-src-manifest.js
+        working-directory: {{WORKING_DIR}}
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+
+      - name: Deploy to GitHub Pages
+        # Replace this entire step if deploying somewhere other than Pages
+        # (see template notes at the top of the file).
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./{{WORKING_DIR}}/dist
