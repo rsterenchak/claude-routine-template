@@ -43,25 +43,33 @@ RAW_BASE="https://raw.githubusercontent.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}/$
 # Note: both manifest variants are fetched; the script keeps the right one
 # based on detection and deletes the other.
 #
-# Files common to ALL project shapes:
-COMMON_FILES=(
+# Files truly universal to EVERY shape (Node web apps and .NET console apps):
+UNIVERSAL_FILES=(
   "CLAUDE.md"
   "TODO.md"
   ".claude/routine-base.md"
   ".claude/routine.md"
   ".github/workflows/claude-run.yml"
+)
+# Node-shape files (build-pipeline + served-from-source): the npm test workflow
+# and the manifest generators. Not used by the console shape.
+NODE_FILES=(
   ".github/workflows/test.yml"
   "scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs"
 )
-# Shape-specific files. A build-pipeline project (build -> dist/ -> gh-pages)
-# gets deploy.yml. A served-from-source project (served straight from main,
-# no build) gets manifest.yml instead (regenerates + commits the manifest to
-# the repo root, where Pages serves it). TEMPLATE_FILES is assembled from
-# COMMON_FILES + the shape-specific set once the shape is determined below.
+# Shape-specific files.
+#   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
+#   served-from-source (served straight from main): manifest.yml
+#   console (.NET console app, no web deploy): a dotnet test workflow, fetched
+#     from the template as test-dotnet.yml and written to the target as test.yml
+#     (the "SRC>DEST" syntax in the fetch loop handles the rename). No manifest
+#     generators, no deploy/manifest workflow.
 BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
+CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
 TEMPLATE_FILES=()  # assembled after shape detection
+
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
@@ -103,10 +111,42 @@ else
   done < <(find "$TARGET" -maxdepth 2 -name package.json -not -path '*/node_modules/*' 2>/dev/null)
 fi
 
+# ── .NET / C# detection (runs before Node detection) ──
+# A C# project has a .csproj or .sln, no package.json, and doesn't deploy to the
+# web. If detected, it's the "console" shape: dotnet test/build commands, no
+# manifest publishing, no deploy/manifest workflow — just the routine + a dotnet
+# test workflow. We short-circuit the Node detection below.
+IS_DOTNET="false"
+DOTNET_PROJ=""
+if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | grep -q .; then
+  IS_DOTNET="true"
+  DOTNET_PROJ="$(find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
+  # Working dir = where the .sln lives, else where the first .csproj lives.
+  sln="$(find "$TARGET" -maxdepth 2 -name '*.sln' -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
+  anchor="${sln:-$DOTNET_PROJ}"
+  WORKING_DIR="$(dirname "${anchor#$TARGET/}")"
+  [ "$WORKING_DIR" = "$TARGET" ] && WORKING_DIR="."
+fi
+
 IS_ESM="false"
 TEST_CMD="(not detected — fill in manually)"
 BUILD_CMD="(not detected — fill in manually)"
-if [ -n "$PKG" ] && [ -f "$PKG" ]; then
+if [ "$IS_DOTNET" = "true" ]; then
+  # .NET console project — fixed dotnet commands, console shape.
+  TEST_CMD="dotnet test"
+  BUILD_CMD="dotnet build"
+  SHAPE="console"
+  SHAPE_REASON="C#/.NET project ($(basename "$DOTNET_PROJ")) — no web deploy"
+  WD_ABS="$TARGET"; [ "$WORKING_DIR" != "." ] && WD_ABS="$TARGET/$WORKING_DIR"
+  # .NET source layout: .cs files usually live alongside the .csproj, sometimes
+  # under src/. Check src/ first, else use the working dir itself.
+  if [ -d "$WD_ABS/src" ]; then
+    SRC_PREFIX="$([ "$WORKING_DIR" = "." ] && echo "src/" || echo "$WORKING_DIR/src/")"
+  else
+    SRC_PREFIX="$([ "$WORKING_DIR" = "." ] && echo "" || echo "$WORKING_DIR/")"
+  fi
+  MANIFEST_VARIANT="(none — console project)"
+elif [ -n "$PKG" ] && [ -f "$PKG" ]; then
   # ESM detection: "type": "module" in package.json
   if grep -Eq '"type"[[:space:]]*:[[:space:]]*"module"' "$PKG"; then
     IS_ESM="true"
@@ -130,63 +170,65 @@ else
   info "WORKING_DIR defaults to '.'; you'll fill in commands manually."
 fi
 
-# Source directory detection — look for a src/ relative to the working dir.
-SRC_PREFIX="(not detected — fill in manually, e.g. src/)"
-WD_ABS="$TARGET"
-[ "$WORKING_DIR" != "." ] && WD_ABS="$TARGET/$WORKING_DIR"
-for candidate in "src" "app/src" "lib" "source"; do
-  if [ -d "$WD_ABS/$candidate" ]; then
-    if [ "$WORKING_DIR" = "." ]; then
-      SRC_PREFIX="$candidate/"
-    else
-      SRC_PREFIX="$WORKING_DIR/$candidate/"
+if [ "$IS_DOTNET" != "true" ]; then
+  # Source directory detection — look for a src/ relative to the working dir.
+  SRC_PREFIX="(not detected — fill in manually, e.g. src/)"
+  WD_ABS="$TARGET"
+  [ "$WORKING_DIR" != "." ] && WD_ABS="$TARGET/$WORKING_DIR"
+  for candidate in "src" "app/src" "lib" "source"; do
+    if [ -d "$WD_ABS/$candidate" ]; then
+      if [ "$WORKING_DIR" = "." ]; then
+        SRC_PREFIX="$candidate/"
+      else
+        SRC_PREFIX="$WORKING_DIR/$candidate/"
+      fi
+      break
     fi
-    break
-  fi
-done
-
-MANIFEST_VARIANT="gen-src-manifest.js"
-[ "$IS_ESM" = "true" ] && MANIFEST_VARIANT="gen-src-manifest.cjs"
-
-# ─────────────────────────────────────────────────────────────────
-# 2c. Detect project SHAPE: build-pipeline vs served-from-source.
-#   build-pipeline    — has a build step that outputs to dist/ (or build/),
-#                       published to gh-pages. Gets deploy.yml + dist-mode
-#                       manifest.
-#   served-from-source — no build; files served straight from main's root
-#                       (or a src/ dir). Gets manifest.yml + root-mode manifest.
-# Signals (file-based — the authoritative Pages setting isn't in the repo, so
-# this is a heuristic the user confirms):
-#   build-pipeline: a real build script + a bundler config (vite/webpack/rollup)
-#   served-from-source: no build script, OR html served at the repo root with
-#                       no bundler config.
-# ─────────────────────────────────────────────────────────────────
-HAS_BUNDLER="false"
-if [ -n "$PKG" ]; then
-  pkgdir="$(dirname "$PKG")"
-  for cfg in vite.config.js vite.config.ts webpack.config.js webpack.config.cjs rollup.config.js rollup.config.mjs; do
-    [ -f "$pkgdir/$cfg" ] && HAS_BUNDLER="true" && break
   done
-fi
-HAS_BUILD="false"
-[ "${BUILD_CMD#\(}" = "$BUILD_CMD" ] && HAS_BUILD="true"   # BUILD_CMD doesn't start with "(not detected"
-HAS_ROOT_HTML="false"
-[ -f "$TARGET/index.html" ] && HAS_ROOT_HTML="true"
 
-SHAPE="unknown"
-SHAPE_REASON=""
-if [ "$HAS_BUILD" = "true" ] && [ "$HAS_BUNDLER" = "true" ]; then
-  SHAPE="build-pipeline"
-  SHAPE_REASON="has a build script and a bundler config"
-elif [ "$HAS_BUILD" != "true" ] && { [ "$HAS_ROOT_HTML" = "true" ] || [ -d "$WD_ABS/src" ]; }; then
-  SHAPE="served-from-source"
-  SHAPE_REASON="no build script; files served directly (root index.html and/or src/)"
-elif [ "$HAS_BUILD" = "true" ]; then
-  SHAPE="build-pipeline"
-  SHAPE_REASON="has a build script (no bundler config detected — verify)"
-else
-  SHAPE="served-from-source"
-  SHAPE_REASON="no build step detected (assuming served-from-source — verify)"
+  MANIFEST_VARIANT="gen-src-manifest.js"
+  [ "$IS_ESM" = "true" ] && MANIFEST_VARIANT="gen-src-manifest.cjs"
+
+  # ───────────────────────────────────────────────────────────────
+  # 2c. Detect project SHAPE: build-pipeline vs served-from-source.
+  #   build-pipeline    — has a build step that outputs to dist/ (or build/),
+  #                       published to gh-pages. Gets deploy.yml + dist-mode
+  #                       manifest.
+  #   served-from-source — no build; files served straight from main's root
+  #                       (or a src/ dir). Gets manifest.yml + root-mode manifest.
+  # Signals (file-based — the authoritative Pages setting isn't in the repo, so
+  # this is a heuristic the user confirms):
+  #   build-pipeline: a real build script + a bundler config (vite/webpack/rollup)
+  #   served-from-source: no build script, OR html served at the repo root with
+  #                       no bundler config.
+  # ───────────────────────────────────────────────────────────────
+  HAS_BUNDLER="false"
+  if [ -n "$PKG" ]; then
+    pkgdir="$(dirname "$PKG")"
+    for cfg in vite.config.js vite.config.ts webpack.config.js webpack.config.cjs rollup.config.js rollup.config.mjs; do
+      [ -f "$pkgdir/$cfg" ] && HAS_BUNDLER="true" && break
+    done
+  fi
+  HAS_BUILD="false"
+  [ "${BUILD_CMD#\(}" = "$BUILD_CMD" ] && HAS_BUILD="true"   # BUILD_CMD doesn't start with "(not detected"
+  HAS_ROOT_HTML="false"
+  [ -f "$TARGET/index.html" ] && HAS_ROOT_HTML="true"
+
+  SHAPE="unknown"
+  SHAPE_REASON=""
+  if [ "$HAS_BUILD" = "true" ] && [ "$HAS_BUNDLER" = "true" ]; then
+    SHAPE="build-pipeline"
+    SHAPE_REASON="has a build script and a bundler config"
+  elif [ "$HAS_BUILD" != "true" ] && { [ "$HAS_ROOT_HTML" = "true" ] || [ -d "$WD_ABS/src" ]; }; then
+    SHAPE="served-from-source"
+    SHAPE_REASON="no build script; files served directly (root index.html and/or src/)"
+  elif [ "$HAS_BUILD" = "true" ]; then
+    SHAPE="build-pipeline"
+    SHAPE_REASON="has a build script (no bundler config detected — verify)"
+  else
+    SHAPE="served-from-source"
+    SHAPE_REASON="no build step detected (assuming served-from-source — verify)"
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────
@@ -195,8 +237,13 @@ fi
 echo "${c_bold}Detected project shape:${c_rst}"
 echo "  package.json:     ${PKG:-none found}"
 echo "  working dir:      $WORKING_DIR"
-echo "  module type:      $([ "$IS_ESM" = "true" ] && echo "ESM (\"type\":\"module\")" || echo "CommonJS")"
-echo "  manifest variant: $MANIFEST_VARIANT  (the other will be removed)"
+if [ "$SHAPE" = "console" ]; then
+  echo "  language:         C# / .NET"
+  echo "  manifest variant: none (console project — no manifest publishing)"
+else
+  echo "  module type:      $([ "$IS_ESM" = "true" ] && echo "ESM (\"type\":\"module\")" || echo "CommonJS")"
+  echo "  manifest variant: $MANIFEST_VARIANT  (the other will be removed)"
+fi
 echo "  source dir:       $SRC_PREFIX"
 echo "  test command:     $TEST_CMD"
 echo "  build command:    $BUILD_CMD"
@@ -204,19 +251,26 @@ echo "  ${c_bold}deploy shape:     $SHAPE${c_rst}  ($SHAPE_REASON)"
 echo
 echo "  ${c_dim}build-pipeline   -> deploy.yml (build, manifest to dist/, publish to gh-pages)${c_rst}"
 echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest to repo root)${c_rst}"
+echo "  ${c_dim}console          -> dotnet test workflow, no deploy, no manifest publishing${c_rst}"
 echo
-read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served' to override] " shape_confirm
+if [ "$SHAPE" = "console" ]; then
+  read -r -p "Detected a C#/.NET console project. Correct? [Y/n, or 'build'/'served' to override] " shape_confirm
+else
+  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console' to override] " shape_confirm
+fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
-  build*|[bB]) SHAPE="build-pipeline"; echo "  -> overridden to build-pipeline" ;;
-  served*|[sS]) SHAPE="served-from-source"; echo "  -> overridden to served-from-source" ;;
+  build*) SHAPE="build-pipeline"; echo "  -> overridden to build-pipeline" ;;
+  served*) SHAPE="served-from-source"; echo "  -> overridden to served-from-source" ;;
+  console*|[cC]) SHAPE="console"; echo "  -> overridden to console" ;;
   [nN]|[nN][oO])
-    echo "Which shape? Type 'build' or 'served':"
+    echo "Which shape? Type 'build', 'served', or 'console':"
     read -r shape_pick
     case "$shape_pick" in
-      build*|[bB]) SHAPE="build-pipeline" ;;
-      served*|[sS]) SHAPE="served-from-source" ;;
-      *) echo "Unrecognized. Aborting — re-run and pick build or served."; exit 1 ;;
+      build*) SHAPE="build-pipeline" ;;
+      served*) SHAPE="served-from-source" ;;
+      console*|[cC]) SHAPE="console" ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build, served, or console."; exit 1 ;;
     esac
     echo "  -> set to $SHAPE"
     ;;
@@ -224,23 +278,34 @@ case "$shape_confirm" in
 esac
 echo
 
-# Assemble the active file list: common files + the shape-specific set.
-TEMPLATE_FILES=( "${COMMON_FILES[@]}" )
-if [ "$SHAPE" = "build-pipeline" ]; then
-  TEMPLATE_FILES+=( "${BUILD_PIPELINE_FILES[@]}" )
-else
-  TEMPLATE_FILES+=( "${SERVED_FROM_SOURCE_FILES[@]}" )
-fi
+# Assemble the active file list. Universal files for every shape; Node shapes
+# also get the npm test workflow + manifest generators; then the shape-specific
+# workflow. The console shape skips NODE_FILES entirely (no npm test, no
+# manifest generators) and brings its own dotnet test workflow.
+TEMPLATE_FILES=( "${UNIVERSAL_FILES[@]}" )
+case "$SHAPE" in
+  build-pipeline)
+    TEMPLATE_FILES+=( "${NODE_FILES[@]}" "${BUILD_PIPELINE_FILES[@]}" )
+    ;;
+  served-from-source)
+    TEMPLATE_FILES+=( "${NODE_FILES[@]}" "${SERVED_FROM_SOURCE_FILES[@]}" )
+    ;;
+  console)
+    TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" )
+    ;;
+esac
 
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
-  # we'll skip the non-chosen manifest variant entirely
-  if [ "$f" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
-  if [ "$f" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
-  if [ -e "$TARGET/$f" ]; then
-    echo "  ${c_yel}skip${c_rst}   $f  (already exists)"
+  # Entries may be "SRC>DEST" (fetch SRC from template, write as DEST in target).
+  dest_rel="${f##*>}"   # everything after the last '>' (or the whole string if none)
+  # skip the non-chosen manifest variant entirely
+  if [ "$dest_rel" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
+  if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
+  if [ -e "$TARGET/$dest_rel" ]; then
+    echo "  ${c_yel}skip${c_rst}   $dest_rel  (already exists)"
   else
-    echo "  ${c_grn}create${c_rst} $f"
+    echo "  ${c_grn}create${c_rst} $dest_rel"
   fi
 done
 echo
@@ -256,21 +321,28 @@ echo
 # ─────────────────────────────────────────────────────────────────
 created=0; skipped=0; failed=0
 for f in "${TEMPLATE_FILES[@]}"; do
+  # Entries may be "SRC>DEST": fetch SRC from the template, write as DEST.
+  if [ "$f" != "${f%>*}" ]; then
+    src_rel="${f%%>*}"   # before the first '>'
+    dest_rel="${f##*>}"  # after the last '>'
+  else
+    src_rel="$f"; dest_rel="$f"
+  fi
   # skip the non-chosen manifest variant
-  if [ "$f" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
-  if [ "$f" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
+  if [ "$dest_rel" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
+  if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
 
-  dest="$TARGET/$f"
+  dest="$TARGET/$dest_rel"
   if [ -e "$dest" ]; then
     skipped=$((skipped+1))
     continue
   fi
   mkdir -p "$(dirname "$dest")"
-  if curl -fsSL "${RAW_BASE}/${f}" -o "$dest"; then
-    echo "  ${c_grn}created${c_rst} $f"
+  if curl -fsSL "${RAW_BASE}/${src_rel}" -o "$dest"; then
+    echo "  ${c_grn}created${c_rst} $dest_rel"
     created=$((created+1))
   else
-    echo "  ${c_red}FAILED${c_rst}  $f  (could not fetch from template — check network / template repo)"
+    echo "  ${c_red}FAILED${c_rst}  $dest_rel  (could not fetch from template — check network / template repo)"
     failed=$((failed+1))
   fi
 done
@@ -308,12 +380,24 @@ STACK="${IN_STACK:-$STACK_DEFAULT}"
 # detection failed (so a non-filled placeholder reads as an obvious TODO, not a
 # literal {{...}} that could slip into a committed workflow file).
 SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_VAL="src/"
-TEST_CMD_VAL="$TEST_CMD"; [ "${TEST_CMD_VAL#\(}" != "$TEST_CMD_VAL" ] && TEST_CMD_VAL="npm test"
-BUILD_CMD_VAL="$BUILD_CMD"; [ "${BUILD_CMD_VAL#\(}" != "$BUILD_CMD_VAL" ] && BUILD_CMD_VAL="npm run build"
 TEST_DIR_VAL="tests/"
-BUILD_DIR_VAL="dist/"
-INSTALL_CMD_VAL="npm install"
-DEPLOY_TARGET_VAL="GitHub Pages"
+DOTNET_VERSION_VAL=""
+if [ "$SHAPE" = "console" ]; then
+  # .NET console defaults.
+  TEST_CMD_VAL="dotnet test"
+  BUILD_CMD_VAL="dotnet build"
+  INSTALL_CMD_VAL="dotnet restore"
+  BUILD_DIR_VAL="bin/"
+  DEPLOY_TARGET_VAL="none (console app)"
+  read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
+  DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
+else
+  TEST_CMD_VAL="$TEST_CMD"; [ "${TEST_CMD_VAL#\(}" != "$TEST_CMD_VAL" ] && TEST_CMD_VAL="npm test"
+  BUILD_CMD_VAL="$BUILD_CMD"; [ "${BUILD_CMD_VAL#\(}" != "$BUILD_CMD_VAL" ] && BUILD_CMD_VAL="npm run build"
+  BUILD_DIR_VAL="dist/"
+  INSTALL_CMD_VAL="npm install"
+  DEPLOY_TARGET_VAL="GitHub Pages"
+fi
 
 # sed-escape a replacement string: backslash, the chosen delimiter (|), and &.
 sed_escape() { printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'; }
@@ -333,12 +417,12 @@ PLACEHOLDER_FILES=(
   ".github/workflows/test.yml"
 )
 # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
-# {{BUILD_COMMAND}}, {{MANIFEST_VARIANT}}, etc.) get filled too.
-if [ "$SHAPE" = "build-pipeline" ]; then
-  PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" )
-else
-  PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" )
-fi
+# {{BUILD_COMMAND}}, {{MANIFEST_VARIANT}}, {{DOTNET_VERSION}}, etc.) get filled.
+case "$SHAPE" in
+  build-pipeline)     PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" ) ;;
+  served-from-source) PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
+  console)            : ;;  # console's test.yml is already in the list above
+esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
   fpath="$TARGET/$pf"
   [ -f "$fpath" ] || continue
@@ -354,6 +438,7 @@ for pf in "${PLACEHOLDER_FILES[@]}"; do
   subst "$fpath" "BUILD_COMMAND" "$BUILD_CMD_VAL"
   subst "$fpath" "DEPLOY_TARGET" "$DEPLOY_TARGET_VAL"
   subst "$fpath" "MANIFEST_VARIANT" "$MANIFEST_VARIANT"
+  [ -n "$DOTNET_VERSION_VAL" ] && subst "$fpath" "DOTNET_VERSION" "$DOTNET_VERSION_VAL"
 done
 echo "  ${c_grn}filled${c_rst} placeholders in $(printf '%s, ' "${PLACEHOLDER_FILES[@]}" | sed 's/, $//')"
 echo "  ${c_yel}note${c_rst}  the \"Key files\" section of CLAUDE.md and the freeform sections of"
