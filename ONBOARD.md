@@ -2,7 +2,7 @@
 
 `onboard.sh` scaffolds the Claude routine into an **existing** repository. It's the counterpart to the "Use this template" button: the template button is for new repos created from scratch; this script is for repos that already exist and have their own code, history, and files.
 
-For the conceptual background — the two project shapes, the required repo settings, and full troubleshooting — see [README.md](./README.md). This doc focuses on running the script; it doesn't repeat everything in the README.
+For the conceptual background — the three project shapes (build-pipeline, served-from-source, console), the required repo settings, and full troubleshooting — see [README.md](./README.md). This doc focuses on running the script; it doesn't repeat everything in the README.
 
 ## Where this script lives
 
@@ -29,9 +29,9 @@ chmod +x /tmp/onboard.sh
 
 The script:
 1. Validates the target is a git repo.
-2. Detects the project's shape from its `package.json` and file layout: ESM vs CommonJS, working directory, source directory, test/build commands, **and deploy shape (build-pipeline vs served-from-source)**.
+2. Detects the project's shape from its `package.json`/file layout (web repos) or `.csproj`/`.sln` (C#/.NET console repos): language, working directory, source directory, test/build commands, **and shape (build-pipeline, served-from-source, or console)**.
 3. Shows you a plan: everything it detected, including the deploy shape and *why* it guessed that.
-4. **Asks you to confirm the deploy shape** — press Enter to accept, or type `build`/`served` to override. (Detection is a file-based heuristic; the authoritative signal is the GitHub Pages setting, which isn't in the repo, so you confirm.)
+4. **Asks you to confirm the shape** — press Enter to accept, or type `build`/`served`/`console` to override. (Detection is a file-based heuristic; for the web shapes the authoritative signal is the GitHub Pages setting, which isn't in the repo, so you confirm.)
 5. Shows which files it will create vs skip, and waits for a final confirmation. **Nothing is written until you say yes.**
 6. Fetches the shape-appropriate routine files from the template and writes only the ones that don't already exist.
 7. **Prompts for the three human-only values** (project name, description, stack) with detected defaults, then **auto-fills every placeholder** across the created files.
@@ -43,13 +43,14 @@ The script picks between the two shapes (see README for what they mean) from fil
 
 - **build-pipeline** — a build script in `package.json` plus a bundler config (`vite.config.*`, `webpack.config.*`, `rollup.config.*`). Scaffolds `deploy.yml`; manifest writes to `dist/`.
 - **served-from-source** — no build script, with a root `index.html` and/or a `src/` directory. Scaffolds `manifest.yml`; manifest writes to the repo root and is committed back to `main`.
+- **console** — a `.csproj` or `.sln` and no `package.json` (a C#/.NET console app). Scaffolds a `dotnet` test workflow (fetched as `test-dotnet.yml`, written to the target as `test.yml`); no manifest generators, no deploy/manifest workflow. Prompts for the .NET SDK version.
 
 The detection always shows its reasoning and always asks for confirmation, because a confident-but-wrong guess is exactly the failure that's expensive to debug later. If the guess is wrong, type `build` or `served` to override before anything is scaffolded.
 
 ## What it will and won't do
 
 **It will:**
-- Detect the deploy shape and scaffold only the matching workflow (build-pipeline gets `deploy.yml`; served-from-source gets `manifest.yml`).
+- Detect the shape and scaffold only the matching workflow (build-pipeline → `deploy.yml`; served-from-source → `manifest.yml`; console → a dotnet `test.yml`, with no manifest generators or web workflows).
 - Detect ESM vs CommonJS and keep the right `gen-src-manifest` variant (`.cjs` for ESM, `.js` for CommonJS).
 - Create routine files that don't already exist in the target.
 - Prompt for project name / description / stack (with detected defaults) and **auto-fill all `{{PLACEHOLDER}}` values** — working dir, source dir, test/build/install commands, manifest variant, etc. — across CLAUDE.md, routine.md, and the shape's workflow.

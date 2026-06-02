@@ -6,23 +6,31 @@ If you're creating a new repo that should be part of this routine, use the **"Us
 
 ---
 
-## Two project shapes
+## Three project shapes
 
-The routine supports two kinds of project, and they differ in how the source manifest gets published. The manifest (`src-manifest.json`) is the file the in-app Claude assistant fetches to populate its file picker, so getting it published correctly is what makes a repo's files attachable in chat.
+The routine supports three kinds of project. The two **web** shapes differ in how the source manifest gets published; the **console** shape is a non-web project that doesn't deploy or publish a manifest at all. The manifest (`src-manifest.json`) is the file the in-app Claude assistant fetches to populate its file picker, so for the web shapes, getting it published correctly is what makes a repo's files attachable in chat.
 
-**Build-pipeline** — the project has a build step (webpack, Vite, etc.) that outputs to `dist/`, and that build output is published to GitHub Pages via a `gh-pages` branch. The manifest is generated into `dist/` at build time and published alongside the build output.
+**Build-pipeline** (web) — the project has a build step (webpack, Vite, etc.) that outputs to `dist/`, and that build output is published to GitHub Pages via a `gh-pages` branch. The manifest is generated into `dist/` at build time and published alongside the build output.
 - Uses: `deploy.yml`
 - Manifest writes to: `dist/`
 - Pages serves from: the `gh-pages` branch
 - Examples: a Webpack/Vite SPA
 
-**Served-from-source** — the project has no build step; the source files *are* the served files, served straight from `main` (Pages set to "Deploy from a branch → main → root"). There is no `dist/`.
+**Served-from-source** (web) — the project has no build step; the source files *are* the served files, served straight from `main` (Pages set to "Deploy from a branch → main → root"). There is no `dist/`.
 - Uses: `manifest.yml`
 - Manifest writes to: the repo root (where Pages serves it)
 - Pages serves from: `main`, root
 - Examples: a plain HTML/CSS/JS site
 
-You pick the shape during onboarding (the `onboard.sh` script detects it and asks you to confirm; if you came via the template button, you choose which workflow to keep — see Step 4). **Keep only the workflow for your shape** — a build-pipeline repo keeps `deploy.yml` and deletes `manifest.yml`; a served-from-source repo does the reverse.
+**Console** (non-web) — a project that runs in a terminal and doesn't deploy: a C#/.NET console app, a CLI tool, a school assignment. There is no website, no GitHub Pages, no manifest publishing. CI builds the project and runs tests; that's the whole loop.
+- Uses: a `dotnet` test workflow (fetched from the template as `test-dotnet.yml`, written as `test.yml`)
+- Manifest: none — console repos have nowhere to serve one, so the in-app file picker stays in free-text mode for them. This matters less than it sounds: chat-driven iteration has the claude-run agent read the repo directly in CI, so you rarely need to attach files. See the note below about leaning on `CLAUDE.md` instead.
+- Deploy: none
+- Examples: a C# console assignment with an xUnit test project
+
+You pick the shape during onboarding. The `onboard.sh` script detects it (build-pipeline vs served-from-source from build/bundler signals; console from a `.csproj`/`.sln` with no `package.json`) and asks you to confirm, with an override if it guesses wrong. If you came via the template button, you keep the files for your shape and delete the rest — a build-pipeline repo keeps `deploy.yml`, a served-from-source repo keeps `manifest.yml`, a console repo keeps the dotnet `test.yml` and deletes the manifest generators and both web workflows.
+
+> **Console repos lean on `CLAUDE.md` more than web repos do.** Because a console repo publishes no manifest, neither the chat assistant nor the claude-run agent can fetch a file list to learn the repo's layout — so they're more prone to guessing file paths from class/type names. Filling in `CLAUDE.md`'s "Key files in this repo" section (Step 2) is therefore *more important* for console repos than for web repos, where the manifest is a backstop. If the chat assistant drafts a TODO entry with a wrong file path for a C# repo, an incomplete key-files section is usually why.
 
 ---
 
@@ -40,16 +48,19 @@ You pick the shape during onboarding (the `onboard.sh` script detects it and ask
 │   └── routine.md                  # Project-specific commands and conventions (fill in)
 ├── .github/
 │   └── workflows/
-│       ├── claude-run.yml          # Dispatches Claude Code on TODO.md entries
-│       ├── test.yml                # CI test runner
+│       ├── claude-run.yml          # Dispatches Claude Code on TODO.md entries (all shapes)
+│       ├── test.yml                # CI test runner for the WEB shapes (npm)
+│       ├── test-dotnet.yml         # CONSOLE shape: dotnet build + test (fetched as test.yml)
 │       ├── deploy.yml              # BUILD-PIPELINE shape: build + manifest to dist/ + publish to gh-pages
 │       └── manifest.yml            # SERVED-FROM-SOURCE shape: regenerate + commit manifest to root
 └── scripts/
-    ├── gen-src-manifest.js         # For CommonJS projects — keep ONE of these
-    └── gen-src-manifest.cjs        # For ESM projects ("type": "module") — keep ONE of these
+    ├── gen-src-manifest.js         # WEB shapes, CommonJS — keep ONE of these
+    └── gen-src-manifest.cjs        # WEB shapes, ESM ("type": "module") — keep ONE of these
 ```
 
 Every file has template instantiation notes at the top explaining what to fill in and what to leave alone. Read those before editing.
+
+A **console** (C#/.NET) repo uses only `claude-run.yml` + the dotnet `test.yml` (from `test-dotnet.yml`) + the routine docs — it keeps none of the manifest generators or web workflows. A **web** repo uses the npm `test.yml`, one manifest generator, and one of `deploy.yml`/`manifest.yml`.
 
 The two manifest generators are now **identical and parameterized** — they read `MANIFEST_OUT_DIR` (default `dist`, set `.` for served-from-source) and `MANIFEST_DETERMINISTIC` (set `true` for served-from-source so the committed manifest only changes when the file list changes). The workflows set these env vars; you don't normally set them by hand.
 
@@ -59,11 +70,13 @@ The two manifest generators are now **identical and parameterized** — they rea
 
 There are roughly **9-11 steps** depending on your project shape. None are hard; most take less than a minute. The total time is dominated by waiting on deploys and external account configurations, not by your active typing time.
 
-> **Two settings that can't live in files — do not skip these.** Two required pieces of setup are GitHub repo settings, not files, so they don't come from the template and are easy to miss. Both bit the first real onboarding hard. They are: **read-write workflow permissions** (Step 9a) and **GitHub Pages source configuration** (Step 9b). If your deploy 403s or your manifest never publishes, it's almost always one of these.
+> **Two settings that can't live in files — do not skip these (web shapes).** Two required pieces of setup are GitHub repo settings, not files, so they don't come from the template and are easy to miss. Both bit the first real onboarding hard. They are: **read-write workflow permissions** (Step 9a) and **GitHub Pages source configuration** (Step 9b). If your deploy 403s or your manifest never publishes, it's almost always one of these. (A **console** repo needs read-write permissions only if you wire up claude-run's auto-merge; it never needs Pages config, since it doesn't deploy.)
 
-### Step 1 — Pick a manifest generator variant
+### Step 1 — Pick a manifest generator variant (web shapes only)
 
-In `scripts/`, you have both `gen-src-manifest.js` and `gen-src-manifest.cjs`. **Keep one, delete the other.** The decision rule:
+**Console/.NET repos skip this step** — they don't publish a manifest, so delete both `gen-src-manifest.js` and `gen-src-manifest.cjs`.
+
+For web shapes: in `scripts/`, you have both `gen-src-manifest.js` and `gen-src-manifest.cjs`. **Keep one, delete the other.** The decision rule:
 
 - Open `package.json`. Does it have `"type": "module"`?
   - **Yes** → keep the `.cjs` variant, delete the `.js`
@@ -78,7 +91,7 @@ Why: Node.js enforces this at runtime. If you use the wrong extension, the scrip
 Open `CLAUDE.md` and follow its onboarding checklist (at the top of the file):
 
 - Replace every `{{PLACEHOLDER}}` with the actual value for your project
-- Fill in the "Key files in this repo" section with the load-bearing files
+- Fill in the "Key files in this repo" section with the load-bearing files — **this matters more for console repos** (see the note in the project-shapes section: console repos have no manifest, so this section is the agent's main source of layout truth)
 - After everything is filled in, **delete the onboarding checklist section** so future readers see clean documentation
 
 ### Step 3 — Update `.claude/routine.md`
@@ -87,12 +100,13 @@ Fill in the project-specific commands (test, build, install). The file has comme
 
 ### Step 4 — Keep and fill the workflow for your shape
 
-Decide your shape (see "Two project shapes" above), then:
+Decide your shape (see "Three project shapes" above), then:
 
-- **Build-pipeline:** keep `.github/workflows/deploy.yml`, delete `.github/workflows/manifest.yml`. Fill in `deploy.yml`'s placeholders: `{{WORKING_DIR}}`, `{{INSTALL_COMMAND}}`, `{{BUILD_COMMAND}}`, `{{MANIFEST_VARIANT}}` (the generator variant you kept), the build-time secrets in the `env:` block (or delete the block), and the deploy step (keep Pages, or swap for Cloudflare/Vercel/Netlify).
-- **Served-from-source:** keep `.github/workflows/manifest.yml`, delete `.github/workflows/deploy.yml`. Fill in `manifest.yml`'s `{{MANIFEST_VARIANT}}`. This workflow regenerates the manifest to the repo root and commits it back to `main` only when the file list changes.
+- **Build-pipeline:** keep `.github/workflows/deploy.yml`, delete `manifest.yml` and `test-dotnet.yml`. Fill in `deploy.yml`'s placeholders: `{{WORKING_DIR}}`, `{{INSTALL_COMMAND}}`, `{{BUILD_COMMAND}}`, `{{MANIFEST_VARIANT}}` (the generator variant you kept), the build-time secrets in the `env:` block (or delete the block), and the deploy step (keep Pages, or swap for Cloudflare/Vercel/Netlify). Also fill the npm `test.yml` (see below).
+- **Served-from-source:** keep `.github/workflows/manifest.yml`, delete `deploy.yml` and `test-dotnet.yml`. Fill in `manifest.yml`'s `{{MANIFEST_VARIANT}}`. This workflow regenerates the manifest to the repo root and commits it back to `main` only when the file list changes. Also fill the npm `test.yml` (see below).
+- **Console (C#/.NET):** delete `deploy.yml`, `manifest.yml`, and the npm `test.yml`; rename `test-dotnet.yml` to `test.yml`. Fill its `{{WORKING_DIR}}` (where the `.sln`/`.csproj` lives, `.` if at root) and `{{DOTNET_VERSION}}` (e.g. `8.0.x` — match your project's target framework). It builds in Release and runs `dotnet test` only when a test project is present, so a no-tests-yet assignment still passes CI on compile. (The `onboard.sh` path does this rename and fill automatically.)
 
-In **both** shapes, also fill `test.yml`'s placeholders: `{{WORKING_DIR}}`, `{{INSTALL_COMMAND}}`, `{{TEST_COMMAND}}`. If your project has no test script yet, set the test command to `npm test --if-present` so CI passes until you add tests. If `WORKING_DIR` is `.`, remove the now-redundant `working-directory:` lines.
+For the **web** shapes, also fill `test.yml`'s placeholders: `{{WORKING_DIR}}`, `{{INSTALL_COMMAND}}`, `{{TEST_COMMAND}}`. If your project has no test script yet, set the test command to `npm test --if-present` so CI passes until you add tests. If `WORKING_DIR` is `.`, remove the now-redundant `working-directory:` lines.
 
 `claude-run.yml` needs no changes beyond the secret in Step 6.
 
@@ -131,16 +145,19 @@ In `todo-injector-worker/src/index.js`:
 - A build-pipeline `deploy.yml` 403s when it tries to push the `gh-pages` branch.
 - A served-from-source `manifest.yml` 403s when it tries to commit the manifest back to `main`.
 
-**9b — Configure the GitHub Pages source for your shape.**
+**9b — Configure the GitHub Pages source for your shape (web shapes only).**
 **Settings → Pages → Source: "Deploy from a branch".**
 - **Build-pipeline:** branch `gh-pages`, folder `/ (root)`. Pages serves the published build output.
 - **Served-from-source:** branch `main`, folder `/ (root)`. Pages serves your source files directly.
+- **Console:** skip — no Pages, no deploy.
 
 If Pages was never enabled, the first deploy may create the branch but Pages won't serve until you point it here.
 
-### Step 10 — Verify the manifest publishes
+### Step 10 — Verify the manifest publishes (web shapes only)
 
-After your first deploy/push, confirm the manifest is reachable:
+**Console repos skip this** — there's no manifest. Instead, verify the dotnet `test.yml` ran green on first push (build + tests). The file picker stays in free-text mode for console repos by design.
+
+For web shapes, after your first deploy/push, confirm the manifest is reachable:
 
 ```
 https://<your-username>.github.io/<your-repo>/src-manifest.json
@@ -208,10 +225,22 @@ The worker's PAT lacks access to this repo or lacks `Actions:read+write`. Check 
 **The served-from-source `manifest.yml` keeps committing on every push / seems to loop.**
 The generator isn't running in deterministic mode (volatile timestamp changes every run → always a diff → always a commit), or the loop guards aren't working. Confirm `manifest.yml` sets `MANIFEST_DETERMINISTIC: 'true'`, that `paths-ignore` includes `src-manifest.json`, and that the commit message carries `[skip ci]`. With those, an unchanged file list produces no commit and the manifest commit doesn't re-trigger the workflow.
 
+**(Console) The chat assistant drafts TODO entries with wrong file paths for a C# repo.**
+Console repos have no manifest, so the assistant can't fetch a file list and guesses paths from class/type names (e.g. `GradeCalculator/GradeCalculator.cs` when the class actually lives in `GradeBook/`). Fill in `CLAUDE.md`'s "Key files in this repo" section with the real paths — that's the assistant's main source of layout truth for console repos. Until then, eyeball the file paths in drafted entries before injecting.
+
+**(Console) `dotnet restore` fails with `MSB1011` ("more than one project or solution file").**
+A bare `dotnet restore` is ambiguous when the repo has multiple `.csproj`/`.sln` files. The template's `test-dotnet.yml` already handles this by discovering the `.sln` at runtime and passing it explicitly; if you wrote the workflow by hand, point the dotnet commands at the `.sln` (or the specific project) rather than running them bare.
+
+**(Console) `dotnet test --no-build` fails with "no test assembly found."**
+`--no-build` is fragile when the build step's project graph doesn't exactly match what test expects. The template's workflow omits `--no-build` and lets `dotnet test` build what it needs; do the same if you hand-wrote it.
+
+**(Console) CI fails with "project file was not found" though the `.sln` is present.**
+The `.sln` references projects by relative path (`GradeBook/GradeBook.csproj`); if the project folders aren't where the `.sln` points (e.g. files got flattened to the repo root during a copy), restore fails. Confirm the on-disk layout matches the `.sln`'s references — `git ls-files` shows what's actually tracked.
+
 ---
 
 ## Why this template exists
 
-The Claude routine has 10+ moving parts that have to be configured consistently across repos, and there are at least two distinct project shapes (build-pipeline and served-from-source) that need different deploy wiring. Onboarding from scratch each time meant re-deriving "what files go where," "what commands wire up," and "which settings need flipping." This template captures the answers once so subsequent onboardings are mechanical rather than archaeological.
+The Claude routine has 10+ moving parts that have to be configured consistently across repos, and there are three distinct project shapes — build-pipeline (web), served-from-source (web), and console (non-web, e.g. C#/.NET) — that need different test/deploy wiring. Onboarding from scratch each time meant re-deriving "what files go where," "what commands wire up," and "which settings need flipping." This template captures the answers once so subsequent onboardings are mechanical rather than archaeological.
 
-If you hit a project shape this template doesn't cover well, the right move is to onboard once, learn what's missing, and update the template — not to fork the template per-project. The served-from-source shape itself was added exactly this way, after a real repo exposed that the build-pipeline assumptions didn't fit.
+If you hit a project shape this template doesn't cover well, the right move is to onboard once, learn what's missing, and update the template — not to fork the template per-project. Both the served-from-source and console shapes were added exactly this way: a real repo of that shape exposed where the existing assumptions didn't fit, the gaps were fixed in the template, and the next repo of that shape onboarded cleanly. The throwaway-repo-then-fix loop is the intended way to extend this to new shapes (e.g. a Python or Java console variant would follow the same path).

@@ -3,18 +3,16 @@ name: Tests
 # ─────────────────────────────────────────────────────────────────
 # CONSOLE / .NET variant of the test workflow.
 # Used for C#/.NET console projects (no build-to-web, no manifest publishing).
-# The onboard script fetches this as test.yml into the target repo.
+# The onboard script fetches this as test.yml into the target repo and fills
+# {{WORKING_DIR}} and {{DOTNET_VERSION}}.
 #
-# Fill in:
-#   {{WORKING_DIR}} — path from repo root to where the .csproj/.sln lives
-#                     ("." if at the root; remove working-directory lines if so).
-#   {{DOTNET_VERSION}} — the .NET SDK version your class/project targets
-#                     (e.g. 8.0.x). Set to whatever your assignment requires.
+# Each step discovers the solution/project file at runtime (a repo with more
+# than one .csproj/.sln makes a bare `dotnet restore` ambiguous — MSB1011 — so
+# we pass an explicit target). Prefers a .sln; falls back to the working dir.
 #
-# Behavior: always builds (a compile failure fails CI — your baseline "it
-# works" signal). Runs `dotnet test` ONLY when a test project is present, so a
-# fresh assignment with no tests yet still passes CI on compile alone. Add a
-# test project later and the test step starts running automatically.
+# Behavior: always builds (a compile failure fails CI). Runs `dotnet test` ONLY
+# when a test project is present, so a fresh assignment with no tests yet still
+# passes CI on compile alone. Add a test project later and tests run automatically.
 # ─────────────────────────────────────────────────────────────────
 
 on:
@@ -38,19 +36,26 @@ jobs:
           dotnet-version: '{{DOTNET_VERSION}}'
 
       - name: Restore
-        run: dotnet restore
         working-directory: {{WORKING_DIR}}
+        run: |
+          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          echo "Restoring ${TARGET:-.}"
+          dotnet restore "${TARGET:-.}"
 
       - name: Build
-        run: dotnet build --no-restore --configuration Release
         working-directory: {{WORKING_DIR}}
+        run: |
+          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          echo "Building ${TARGET:-.}"
+          dotnet build "${TARGET:-.}" --no-restore --configuration Release
 
       - name: Test (only if a test project exists)
         working-directory: {{WORKING_DIR}}
         run: |
           if find . -name '*.csproj' -print0 | xargs -0 grep -l -i 'Microsoft.NET.Test.Sdk' 2>/dev/null | grep -q .; then
-            echo "Test project detected — running dotnet test."
-            dotnet test --no-build --configuration Release --verbosity normal
+            TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+            echo "Test project detected — running dotnet test on ${TARGET:-.}"
+            dotnet test "${TARGET:-.}" --configuration Release --verbosity normal
           else
             echo "No test project detected — build passed, skipping tests."
           fi
