@@ -197,49 +197,130 @@ echo
 echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
 echo
 
+REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "<owner>/<repo>")"
+
+# ─────────────────────────────────────────────────────────────────
+# 4b. Fill placeholders — substitute detected + prompted values into the
+#     files that contain {{...}} markers. routine-base.md and the manifest
+#     scripts have no placeholders and are left alone. The "Key files" section
+#     of CLAUDE.md and the comment-guided sections of routine.md are freeform
+#     and can't be auto-filled — you complete those by hand (reminded below).
+# ─────────────────────────────────────────────────────────────────
+echo "${c_bold}Fill placeholders${c_rst} — press Enter to accept the [detected default], or type a value."
+echo
+
+# Default project name = repo basename (from the remote guess, or dir name).
+NAME_DEFAULT="$(basename "$REPO_GUESS")"
+[ "$NAME_DEFAULT" = "<repo>" ] && NAME_DEFAULT="$(basename "$TARGET")"
+
+read -r -p "  Project name [${NAME_DEFAULT}]: " IN_NAME
+PROJECT_NAME="${IN_NAME:-$NAME_DEFAULT}"
+
+read -r -p "  One-line description: " IN_DESC
+PROJECT_DESCRIPTION="${IN_DESC:-(fill in a one-line description)}"
+
+STACK_DEFAULT="$([ "$IS_ESM" = "true" ] && echo "ESM (type: module)" || echo "CommonJS")"
+read -r -p "  Stack [${STACK_DEFAULT}]: " IN_STACK
+STACK="${IN_STACK:-$STACK_DEFAULT}"
+
+# Derived defaults for the remaining slots, falling back to readable hints when
+# detection failed (so a non-filled placeholder reads as an obvious TODO, not a
+# literal {{...}} that could slip into a committed workflow file).
+SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_VAL="src/"
+TEST_CMD_VAL="$TEST_CMD"; [ "${TEST_CMD_VAL#\(}" != "$TEST_CMD_VAL" ] && TEST_CMD_VAL="npm test"
+BUILD_CMD_VAL="$BUILD_CMD"; [ "${BUILD_CMD_VAL#\(}" != "$BUILD_CMD_VAL" ] && BUILD_CMD_VAL="npm run build"
+TEST_DIR_VAL="tests/"
+BUILD_DIR_VAL="dist/"
+INSTALL_CMD_VAL="npm install"
+DEPLOY_TARGET_VAL="GitHub Pages"
+
+# sed-escape a replacement string: backslash, the chosen delimiter (|), and &.
+sed_escape() { printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'; }
+
+# Apply one {{KEY}} -> value substitution across a file, in place.
+subst() { # $1=file  $2=key  $3=value
+  local esc; esc="$(sed_escape "$3")"
+  sed -i.bak "s|{{$2}}|$esc|g" "$1" && rm -f "$1.bak"
+}
+
+# Files that carry placeholders (relative to target). Skip any that were skipped
+# during creation (already existed — don't rewrite the user's own file) and any
+# that don't exist.
+PLACEHOLDER_FILES=(
+  "CLAUDE.md"
+  ".claude/routine.md"
+  ".github/workflows/test.yml"
+  ".github/workflows/deploy.yml"
+)
+for pf in "${PLACEHOLDER_FILES[@]}"; do
+  fpath="$TARGET/$pf"
+  [ -f "$fpath" ] || continue
+  subst "$fpath" "PROJECT_NAME" "$PROJECT_NAME"
+  subst "$fpath" "PROJECT_DESCRIPTION" "$PROJECT_DESCRIPTION"
+  subst "$fpath" "STACK" "$STACK"
+  subst "$fpath" "WORKING_DIR" "$WORKING_DIR"
+  subst "$fpath" "SRC_DIR" "$SRC_DIR_VAL"
+  subst "$fpath" "TEST_DIR" "$TEST_DIR_VAL"
+  subst "$fpath" "BUILD_DIR" "$BUILD_DIR_VAL"
+  subst "$fpath" "INSTALL_COMMAND" "$INSTALL_CMD_VAL"
+  subst "$fpath" "TEST_COMMAND" "$TEST_CMD_VAL"
+  subst "$fpath" "BUILD_COMMAND" "$BUILD_CMD_VAL"
+  subst "$fpath" "DEPLOY_TARGET" "$DEPLOY_TARGET_VAL"
+  subst "$fpath" "MANIFEST_VARIANT" "$MANIFEST_VARIANT"
+done
+echo "  ${c_grn}filled${c_rst} placeholders in $(printf '%s, ' "${PLACEHOLDER_FILES[@]}" | sed 's/, $//')"
+echo "  ${c_yel}note${c_rst}  the \"Key files\" section of CLAUDE.md and the freeform sections of"
+echo "        routine.md are not auto-filled — complete those by hand."
+echo
+
 # ─────────────────────────────────────────────────────────────────
 # 5. Remaining manual steps — with detected values pre-filled
 # ─────────────────────────────────────────────────────────────────
-REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "<owner>/<repo>")"
 
 cat <<EOF
 ${c_bold}Remaining manual steps:${c_rst}
 
-  1. Fill in CLAUDE.md placeholders (then delete its onboarding checklist section).
-     Detected values to use:
-       {{WORKING_DIR}}  -> $WORKING_DIR
-       {{SRC_DIR}}      -> $SRC_PREFIX
-       {{TEST_COMMAND}} -> $TEST_CMD
-       {{BUILD_COMMAND}}-> $BUILD_CMD
+  1. Complete the freeform sections the script can't auto-fill:
+       - CLAUDE.md "Key files in this repo" — list the load-bearing files.
+       - CLAUDE.md — delete the onboarding-checklist section once reviewed.
+       - .claude/routine.md — fill the project-specific conventions / fragile
+         areas / notes sections (or write "none" where nothing applies).
+     If WORKING_DIR is ".", also remove the now-redundant working-directory:
+     lines from the workflow files (they read "working-directory: .").
 
-  2. Fill in .claude/routine.md placeholders (same values as above).
-
-  3. Fill in workflow placeholders in .github/workflows/test.yml and deploy.yml:
-       {{WORKING_DIR}} -> $WORKING_DIR
-     If WORKING_DIR is ".", also remove the working-directory: lines.
-
-  4. Configure the Claude GitHub App for this repo:
+  2. Configure the Claude GitHub App for this repo:
        https://github.com/apps/claude
 
-  5. Add CLAUDE_CODE_OAUTH_TOKEN secret to this repo:
+  3. Add CLAUDE_CODE_OAUTH_TOKEN secret to this repo:
        Settings -> Secrets and variables -> Actions -> New repository secret
 
-  6. Add this repo to your GitHub PAT's access list (Contents:write, Actions:read+write):
+  4. Add this repo to your GitHub PAT's access list (Contents:write, Actions:read+write):
        https://github.com/settings/personal-access-tokens
 
-  7. Add to todo-injector-worker ALLOWED_TARGETS in src/index.js:
-       { repo: "$REPO_GUESS", filePath: "TODO.md", srcPrefix: "$SRC_PREFIX" }
+  5. Add to todo-injector-worker ALLOWED_TARGETS in src/index.js:
+       { repo: "$REPO_GUESS", filePath: "TODO.md", srcPrefix: "$SRC_DIR_VAL" }
      Then: cd todo-injector-worker && npm run deploy
 
-  8. Verify the manifest publishes after first deploy, then inject a test entry
+  6. Verify the manifest publishes after first deploy, then inject a test entry
      and confirm claude-run.yml picks it up.
+
+${c_bold}Values that were filled in:${c_rst}
+  project name:  $PROJECT_NAME
+  description:   $PROJECT_DESCRIPTION
+  stack:         $STACK
+  working dir:   $WORKING_DIR
+  source dir:    $SRC_DIR_VAL
+  test command:  $TEST_CMD_VAL
+  build command: $BUILD_CMD_VAL
+  (review these in the files; re-run with a fresh checkout if any are wrong)
 
 EOF
 
 if [ "$skipped" -gt 0 ]; then
-  echo "${c_yel}Note:${c_rst} $skipped file(s) already existed and were skipped. If your repo"
-  echo "      already has a README, workflows, or CLAUDE.md, you may need to merge"
-  echo "      the template's content into them manually."
+  echo "${c_yel}Note:${c_rst} $skipped file(s) already existed and were skipped — placeholders in"
+  echo "      those were NOT touched (the script never edits files it didn't create)."
+  echo "      If your repo already has a CLAUDE.md or workflow, merge the template's"
+  echo "      content and fill its placeholders by hand."
   echo
 fi
 
