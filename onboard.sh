@@ -42,17 +42,26 @@ RAW_BASE="https://raw.githubusercontent.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}/$
 # UPDATE THIS LIST when you add new files to the template.
 # Note: both manifest variants are fetched; the script keeps the right one
 # based on detection and deletes the other.
-TEMPLATE_FILES=(
+#
+# Files common to ALL project shapes:
+COMMON_FILES=(
   "CLAUDE.md"
   "TODO.md"
   ".claude/routine-base.md"
   ".claude/routine.md"
   ".github/workflows/claude-run.yml"
   ".github/workflows/test.yml"
-  ".github/workflows/deploy.yml"
   "scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs"
 )
+# Shape-specific files. A build-pipeline project (build -> dist/ -> gh-pages)
+# gets deploy.yml. A served-from-source project (served straight from main,
+# no build) gets manifest.yml instead (regenerates + commits the manifest to
+# the repo root, where Pages serves it). TEMPLATE_FILES is assembled from
+# COMMON_FILES + the shape-specific set once the shape is determined below.
+BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
+SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
+TEMPLATE_FILES=()  # assembled after shape detection
 
 # ─────────────────────────────────────────────────────────────────
 # Helpers
@@ -140,6 +149,47 @@ MANIFEST_VARIANT="gen-src-manifest.js"
 [ "$IS_ESM" = "true" ] && MANIFEST_VARIANT="gen-src-manifest.cjs"
 
 # ─────────────────────────────────────────────────────────────────
+# 2c. Detect project SHAPE: build-pipeline vs served-from-source.
+#   build-pipeline    — has a build step that outputs to dist/ (or build/),
+#                       published to gh-pages. Gets deploy.yml + dist-mode
+#                       manifest.
+#   served-from-source — no build; files served straight from main's root
+#                       (or a src/ dir). Gets manifest.yml + root-mode manifest.
+# Signals (file-based — the authoritative Pages setting isn't in the repo, so
+# this is a heuristic the user confirms):
+#   build-pipeline: a real build script + a bundler config (vite/webpack/rollup)
+#   served-from-source: no build script, OR html served at the repo root with
+#                       no bundler config.
+# ─────────────────────────────────────────────────────────────────
+HAS_BUNDLER="false"
+if [ -n "$PKG" ]; then
+  pkgdir="$(dirname "$PKG")"
+  for cfg in vite.config.js vite.config.ts webpack.config.js webpack.config.cjs rollup.config.js rollup.config.mjs; do
+    [ -f "$pkgdir/$cfg" ] && HAS_BUNDLER="true" && break
+  done
+fi
+HAS_BUILD="false"
+[ "${BUILD_CMD#\(}" = "$BUILD_CMD" ] && HAS_BUILD="true"   # BUILD_CMD doesn't start with "(not detected"
+HAS_ROOT_HTML="false"
+[ -f "$TARGET/index.html" ] && HAS_ROOT_HTML="true"
+
+SHAPE="unknown"
+SHAPE_REASON=""
+if [ "$HAS_BUILD" = "true" ] && [ "$HAS_BUNDLER" = "true" ]; then
+  SHAPE="build-pipeline"
+  SHAPE_REASON="has a build script and a bundler config"
+elif [ "$HAS_BUILD" != "true" ] && { [ "$HAS_ROOT_HTML" = "true" ] || [ -d "$WD_ABS/src" ]; }; then
+  SHAPE="served-from-source"
+  SHAPE_REASON="no build script; files served directly (root index.html and/or src/)"
+elif [ "$HAS_BUILD" = "true" ]; then
+  SHAPE="build-pipeline"
+  SHAPE_REASON="has a build script (no bundler config detected — verify)"
+else
+  SHAPE="served-from-source"
+  SHAPE_REASON="no build step detected (assuming served-from-source — verify)"
+fi
+
+# ─────────────────────────────────────────────────────────────────
 # 3. Show the plan
 # ─────────────────────────────────────────────────────────────────
 echo "${c_bold}Detected project shape:${c_rst}"
@@ -150,7 +200,38 @@ echo "  manifest variant: $MANIFEST_VARIANT  (the other will be removed)"
 echo "  source dir:       $SRC_PREFIX"
 echo "  test command:     $TEST_CMD"
 echo "  build command:    $BUILD_CMD"
+echo "  ${c_bold}deploy shape:     $SHAPE${c_rst}  ($SHAPE_REASON)"
 echo
+echo "  ${c_dim}build-pipeline   -> deploy.yml (build, manifest to dist/, publish to gh-pages)${c_rst}"
+echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest to repo root)${c_rst}"
+echo
+read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served' to override] " shape_confirm
+case "$shape_confirm" in
+  ""|[yY]|[yY][eE][sS]) ;;
+  build*|[bB]) SHAPE="build-pipeline"; echo "  -> overridden to build-pipeline" ;;
+  served*|[sS]) SHAPE="served-from-source"; echo "  -> overridden to served-from-source" ;;
+  [nN]|[nN][oO])
+    echo "Which shape? Type 'build' or 'served':"
+    read -r shape_pick
+    case "$shape_pick" in
+      build*|[bB]) SHAPE="build-pipeline" ;;
+      served*|[sS]) SHAPE="served-from-source" ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build or served."; exit 1 ;;
+    esac
+    echo "  -> set to $SHAPE"
+    ;;
+  *) echo "Unrecognized response. Aborting."; exit 1 ;;
+esac
+echo
+
+# Assemble the active file list: common files + the shape-specific set.
+TEMPLATE_FILES=( "${COMMON_FILES[@]}" )
+if [ "$SHAPE" = "build-pipeline" ]; then
+  TEMPLATE_FILES+=( "${BUILD_PIPELINE_FILES[@]}" )
+else
+  TEMPLATE_FILES+=( "${SERVED_FROM_SOURCE_FILES[@]}" )
+fi
+
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
   # we'll skip the non-chosen manifest variant entirely
@@ -250,8 +331,14 @@ PLACEHOLDER_FILES=(
   "CLAUDE.md"
   ".claude/routine.md"
   ".github/workflows/test.yml"
-  ".github/workflows/deploy.yml"
 )
+# Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
+# {{BUILD_COMMAND}}, {{MANIFEST_VARIANT}}, etc.) get filled too.
+if [ "$SHAPE" = "build-pipeline" ]; then
+  PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" )
+else
+  PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" )
+fi
 for pf in "${PLACEHOLDER_FILES[@]}"; do
   fpath="$TARGET/$pf"
   [ -f "$fpath" ] || continue

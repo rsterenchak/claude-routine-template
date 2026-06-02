@@ -1,57 +1,53 @@
-// Build helper — writes the current source inventory to dist/src-manifest.json
-// so the in-app Claude assistant's Worker can fetch an always-current file list
-// instead of relying on a hand-maintained list baked into the Worker prompt.
+// Build helper — writes the current source inventory to src-manifest.json so
+// the in-app Claude assistant's Worker can fetch an always-current file list.
 //
 // ─────────────────────────────────────────────────────────────────
 // TEMPLATE INSTANTIATION NOTES
-// This file is the CommonJS (.js) variant. Use it when this project's
-// package.json does NOT have "type": "module".
+// This is the CommonJS (.js) variant. Use it when package.json does NOT have
+// "type": "module". For ESM projects ("type": "module"), use the .cjs variant.
 //
-// If package.json HAS "type": "module", DELETE THIS FILE and use the
-// .cjs variant instead. Node enforces the file extension when "type":
-// "module" is set — running a .js file in an ESM project will fail with
-// "require is not defined".
+// Parameterized by two environment variables so one script serves both project
+// shapes:
 //
-// The script is invoked by deploy.yml after the build step:
-//   - name: Generate source manifest
-//     run: node scripts/gen-src-manifest.js
-//     working-directory: <your project's working dir>
+//   MANIFEST_OUT_DIR   — where to write src-manifest.json, relative to the repo
+//                        root. Default "dist" (build-pipeline projects whose
+//                        build output is published). Set "." for served-from-
+//                        source projects (served straight from the repo root on
+//                        main — no build, no dist/).
 //
-// Output: dist/src-manifest.json published alongside the built assets so the
-// in-app Claude assistant fetches it at:
-//   https://<owner>.github.io/<repo>/src-manifest.json
-// (or whatever the project's deploy URL pattern is for static assets).
+//   MANIFEST_DETERMINISTIC — "true" omits the volatile generatedAt/sha fields so
+//                        the manifest only changes when the file LIST changes.
+//                        Used by served-from-source projects whose workflow
+//                        commits the manifest back to the branch (volatile
+//                        fields would force a commit on every push). Build-
+//                        pipeline projects leave this unset.
+//
+// The onboard script sets these based on detected project shape. If you run the
+// generator by hand, set them to match your shape (or accept the dist/ default).
 // ─────────────────────────────────────────────────────────────────
 
 const fs = require('fs');
 const path = require('path');
 
-// `__dirname` resolves to scripts/, so srcDir is one level up at src/.
-// If your project's source is at a DIFFERENT path relative to this script
-// (e.g. lib/ or app/src/), adjust the path.resolve call below.
 const srcDir = path.resolve(__dirname, '..', 'src');
-const distDir = path.resolve(__dirname, '..', 'dist');
 
-// File extensions to include. Defaults cover most modern web stacks
-// (JS/JSX/TS/TSX/CSS). Adjust if your project has other source types worth
-// surfacing — e.g. add 'vue', 'svelte', 'astro' for those frameworks; 'md'
-// if markdown files are load-bearing source.
+const outDirName = process.env.MANIFEST_OUT_DIR || 'dist';
+const outDir = path.resolve(__dirname, '..', outDirName);
+
 const files = fs
   .readdirSync(srcDir)
-  .filter((f) => /\.(?:jsx?|tsx?|css)$/.test(f))
+  .filter((f) => /\.(?:jsx?|tsx?|css|html)$/.test(f))
   .sort();
 
-fs.mkdirSync(distDir, { recursive: true });
+const deterministic = process.env.MANIFEST_DETERMINISTIC === 'true';
+const manifest = deterministic
+  ? { files }
+  : { generatedAt: new Date().toISOString(), sha: process.env.GITHUB_SHA || '', files };
 
-const manifest = {
-  generatedAt: new Date().toISOString(),
-  sha: process.env.GITHUB_SHA || '',
-  files,
-};
-
+fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(
-  path.join(distDir, 'src-manifest.json'),
+  path.join(outDir, 'src-manifest.json'),
   JSON.stringify(manifest, null, 2)
 );
 
-console.log('src-manifest.json written:', files.length, 'files');
+console.log('src-manifest.json written to ' + outDirName + '/ —', files.length, 'files');

@@ -1,0 +1,58 @@
+name: Update source manifest
+
+# ─────────────────────────────────────────────────────────────────
+# SERVED-FROM-SOURCE variant.
+# Use this (instead of deploy.yml) for repos served straight from `main` with
+# NO build step — GitHub Pages set to "Deploy from a branch -> main -> root".
+# Such repos have no dist/ to publish; the source files ARE the served files.
+#
+# This workflow regenerates src-manifest.json at the repo ROOT (where Pages
+# serves it) and commits it back to main, but only when the file LIST changed.
+# The generator runs in deterministic mode (no volatile timestamp/sha) so an
+# unchanged file list produces an identical manifest and no commit.
+#
+# Loop prevention: paths-ignore skips src-manifest.json (so the manifest commit
+# doesn't re-trigger this workflow) and the commit carries [skip ci] as a
+# belt-and-suspenders guard.
+#
+# The onboard script fills {{MANIFEST_VARIANT}} with the right generator
+# (.js or .cjs) for this project.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+      - 'src-manifest.json'
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate manifest (repo root, deterministic)
+        run: node scripts/{{MANIFEST_VARIANT}}
+        env:
+          MANIFEST_OUT_DIR: '.'
+          MANIFEST_DETERMINISTIC: 'true'
+
+      - name: Commit manifest if the file list changed
+        run: |
+          if [[ -n "$(git status --porcelain src-manifest.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add src-manifest.json
+            git commit -m "Update source manifest [skip ci]"
+            git push
+          else
+            echo "Manifest unchanged — nothing to commit."
+          fi
