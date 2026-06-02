@@ -1,0 +1,96 @@
+name: Claude run
+
+# ─────────────────────────────────────────────────────────────────
+# TEMPLATE INSTANTIATION NOTES
+# This workflow is *mostly* generic — the actual routine logic lives in
+# .claude/routine-base.md (universal) and .claude/routine.md (project-specific),
+# both of which the agent reads at runtime. You should only need to adjust:
+#
+#   1. The CLAUDE_CODE_OAUTH_TOKEN secret must be configured for THIS repo:
+#      Settings → Secrets and variables → Actions → New repository secret
+#      Name: CLAUDE_CODE_OAUTH_TOKEN
+#      Value: your Claude Code OAuth token (Pro/Max subscription auth — see
+#             https://docs.claude.com/en/docs/claude-code for token setup).
+#      DO NOT use ANTHROPIC_API_KEY here — if both are set, the API key wins
+#      and you'll bill the API instead of using your plan quota.
+#
+#   2. The `--model` value below is currently `claude-opus-4-8`. Change ONLY
+#      if you have a specific reason (e.g. testing with a different model).
+#
+#   3. `show_full_output: true` is a TEMPORARY debug aid for first runs in a
+#      new repo — verify the agent's output is reasonable, then remove this
+#      line to reduce CI log noise. Once the routine is landing PRs cleanly
+#      and you're not actively debugging, set it to false or delete the line.
+#
+# Otherwise, leave this file alone. It's deliberately minimal so the routine
+# behavior lives in .md files where it's easier to evolve without touching CI.
+# ─────────────────────────────────────────────────────────────────
+
+# correlation_id is echoed here so the Worker can find this run by name
+# (workflow_dispatch does not return a run id to the caller).
+run-name: Claude run ${{ inputs.correlation_id }} · ${{ inputs.mode }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: backlog (next eligible task) or entry (single tagged task)
+        type: choice
+        options: [backlog, entry]
+        default: backlog
+      entry_id:
+        description: todo id to target (entry mode only)
+        type: string
+        required: false
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write   # required: the action authenticates via OIDC
+
+concurrency:
+  # one run at a time; a second dispatch queues rather than overlapping
+  group: claude-run
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # Authenticates the gh CLI for the routine's PR-create / auto-merge.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          # Subscription auth (Pro/Max) — NOT anthropic_api_key. If an
+          # ANTHROPIC_API_KEY is also present in the env it wins and bills API.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # --model: Opus 4.8 (draws on plan quota faster than Sonnet).
+          # --dangerously-skip-permissions: required for unattended CI — no
+          #   human to approve npm/git/gh commands. Safe here: ephemeral
+          #   sandboxed runner, work lands via branch + PR, never on main
+          #   directly, and the routine's own constraints bound behavior.
+          claude_args: "--max-turns 100 --model claude-opus-4-8 --dangerously-skip-permissions"
+          # TEMPORARY: surface the agent's full output for early verification
+          # in a new repo. Remove or set false once the routine is landing PRs
+          # cleanly and you're not actively debugging.
+          show_full_output: true
+          prompt: |
+            You are running an automated code-development routine for this repository.
+            Run mode: ${{ inputs.mode }}
+            Target entry id (entry mode only): ${{ inputs.entry_id }}
+
+            Read `.claude/routine-base.md` (the universal routine rules) and
+            `.claude/routine.md` (this project's configuration) from the
+            repository, then execute the routine exactly as those files
+            describe, for the run mode above. Complete exactly one task, then
+            exit with the one-paragraph summary the routine specifies.
