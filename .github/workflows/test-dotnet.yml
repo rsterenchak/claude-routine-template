@@ -1,0 +1,56 @@
+name: Tests
+
+# ─────────────────────────────────────────────────────────────────
+# CONSOLE / .NET variant of the test workflow.
+# Used for C#/.NET console projects (no build-to-web, no manifest publishing).
+# The onboard script fetches this as test.yml into the target repo.
+#
+# Fill in:
+#   {{WORKING_DIR}} — path from repo root to where the .csproj/.sln lives
+#                     ("." if at the root; remove working-directory lines if so).
+#   {{DOTNET_VERSION}} — the .NET SDK version your class/project targets
+#                     (e.g. 8.0.x). Set to whatever your assignment requires.
+#
+# Behavior: always builds (a compile failure fails CI — your baseline "it
+# works" signal). Runs `dotnet test` ONLY when a test project is present, so a
+# fresh assignment with no tests yet still passes CI on compile alone. Add a
+# test project later and the test step starts running automatically.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+  pull_request:
+    paths-ignore:
+      - 'TODO.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '{{DOTNET_VERSION}}'
+
+      - name: Restore
+        run: dotnet restore
+        working-directory: {{WORKING_DIR}}
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+        working-directory: {{WORKING_DIR}}
+
+      - name: Test (only if a test project exists)
+        working-directory: {{WORKING_DIR}}
+        run: |
+          if find . -name '*.csproj' -print0 | xargs -0 grep -l -i 'Microsoft.NET.Test.Sdk' 2>/dev/null | grep -q .; then
+            echo "Test project detected — running dotnet test."
+            dotnet test --no-build --configuration Release --verbosity normal
+          else
+            echo "No test project detected — build passed, skipping tests."
+          fi
