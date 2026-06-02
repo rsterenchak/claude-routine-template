@@ -63,11 +63,11 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install
+        run: {{INSTALL_COMMAND}}
         working-directory: {{WORKING_DIR}}
 
       - name: Build
-        run: npm run build
+        run: {{BUILD_COMMAND}}
         working-directory: {{WORKING_DIR}}
         env:
           # Replace with secrets THIS project needs at build time. Delete
@@ -76,10 +76,9 @@ jobs:
 
       - name: Generate source manifest
         # Picks the file inventory the in-app Claude assistant uses for its
-        # file picker. LEAVE THIS STEP IN. Adjust the script path only:
-        # .js for CommonJS projects, .cjs for ESM projects (when
-        # package.json has "type": "module").
-        run: node scripts/gen-src-manifest.js
+        # file picker. LEAVE THIS STEP IN. The script path is filled by the
+        # onboard script to match the manifest variant (.js or .cjs).
+        run: node scripts/{{MANIFEST_VARIANT}}
         working-directory: {{WORKING_DIR}}
         env:
           GITHUB_SHA: ${{ github.sha }}
