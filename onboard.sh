@@ -321,6 +321,37 @@ esac
 echo "  -> $PURPOSE"
 echo
 
+# ─────────────────────────────────────────────────────────────────
+# 2c. Optional gh CLI integration
+# Detects the GitHub CLI and (if installed and authenticated) offers to
+# auto-configure repo settings during onboarding: workflow permissions,
+# Pages source, and optionally the CLAUDE_CODE_OAUTH_TOKEN secret. Each of
+# these is otherwise a manual step in the post-onboarding checklist.
+# Silent when gh is not installed (no nag). When installed-but-not-authed,
+# surfaces a one-time hint about gh auth login.
+# ─────────────────────────────────────────────────────────────────
+USE_GH=false
+GH_INSTALLED=false
+if command -v gh >/dev/null 2>&1; then
+  GH_INSTALLED=true
+  if gh auth status >/dev/null 2>&1; then
+    echo "${c_bold}gh CLI detected and authenticated${c_rst}"
+    echo "  ${c_dim}Can auto-configure: workflow permissions, Pages source, and the OAuth token secret.${c_rst}"
+    echo "  ${c_dim}Saying no falls back to manual instructions (current behavior).${c_rst}"
+    read -r -p "  Auto-configure these via gh CLI? [Y/n] " gh_confirm
+    case "$gh_confirm" in
+      ""|[yY]|[yY][eE][sS]) USE_GH=true; echo "  -> will auto-configure after file creation" ;;
+      *) USE_GH=false; echo "  -> skipping gh auto-config, will print manual steps as usual" ;;
+    esac
+    echo
+  else
+    echo "${c_yel}note${c_rst}  gh CLI is installed but not authenticated."
+    echo "        Run ${c_bold}gh auth login${c_rst} once to enable auto-configuration of repo"
+    echo "        settings on future onboardings. Falling back to manual instructions this run."
+    echo
+  fi
+fi
+
 # Assemble the active file list. Universal files for every shape; Node shapes
 # also get the npm test workflow + manifest generators; then the shape-specific
 # workflow. The console shape skips NODE_FILES entirely (no npm test, no
@@ -518,6 +549,99 @@ echo "        routine.md are not auto-filled — complete those by hand."
 echo
 
 # ─────────────────────────────────────────────────────────────────
+# 4c. gh CLI auto-configuration (if consented earlier)
+# Runs only when USE_GH=true. Each sub-step is independent — a failure in
+# one doesn't block the others, and each prints a clear status line. The
+# *_DONE flags drive conditional suppression in the manual-steps output
+# below, so the user sees the manual instructions ONLY for steps that
+# weren't automated.
+# ─────────────────────────────────────────────────────────────────
+GH_WORKFLOW_DONE=false
+GH_PAGES_DONE=false
+GH_PAGES_DEFERRED=false   # build-pipeline: Pages enabling fails until gh-pages exists
+GH_SECRET_DONE=false
+if [ "$USE_GH" = "true" ]; then
+  REPO_FOR_GH="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "")"
+  if [ -z "$REPO_FOR_GH" ] || [ "$REPO_FOR_GH" = "<owner>/<repo>" ]; then
+    echo "${c_yel}note${c_rst}  couldn't determine repo from git remote — skipping gh auto-config."
+    echo "        Configure GitHub settings manually using the steps below."
+    echo
+  else
+    echo "${c_bold}Configuring GitHub repo settings via gh CLI${c_rst} (${c_dim}$REPO_FOR_GH${c_rst})"
+
+    # 1. Workflow permissions — universal, applies to all shapes.
+    # Sets read-write permissions and enables can-approve-pull-request-reviews
+    # (needed for claude-run.yml's auto-merge step).
+    if gh api -X PUT "/repos/$REPO_FOR_GH/actions/permissions/workflow" \
+         -F "default_workflow_permissions=write" \
+         -F "can_approve_pull_request_reviews=true" >/dev/null 2>&1; then
+      echo "  ${c_grn}set${c_rst}    workflow permissions: read-write + can-approve-PRs"
+      GH_WORKFLOW_DONE=true
+    else
+      echo "  ${c_red}FAILED${c_rst} workflow permissions (set manually in Settings -> Actions -> General -> Workflow permissions)"
+    fi
+
+    # 2. Pages source — web shapes only. Console skips entirely.
+    case "$SHAPE" in
+      build-pipeline)
+        # Try-and-catch: if gh-pages branch doesn't exist yet (first onboarding,
+        # pre-deploy), the API call fails. That's normal — surface a clear
+        # message about re-running after first deploy creates the branch.
+        if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
+             -f "source[branch]=gh-pages" -f "source[path]=/" >/dev/null 2>&1; then
+          echo "  ${c_grn}set${c_rst}    Pages source: gh-pages branch, root"
+          GH_PAGES_DONE=true
+        else
+          echo "  ${c_yel}skip${c_rst}   Pages enabling (gh-pages branch doesn't exist yet — normal for first onboarding)"
+          echo "         After your first deploy creates gh-pages, run:"
+          echo "         ${c_dim}gh api -X PUT /repos/$REPO_FOR_GH/pages -f 'source[branch]=gh-pages' -f 'source[path]=/'${c_rst}"
+          GH_PAGES_DEFERRED=true
+        fi
+        ;;
+      served-from-source)
+        if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
+             -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
+          echo "  ${c_grn}set${c_rst}    Pages source: main branch, root"
+          GH_PAGES_DONE=true
+        else
+          echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
+        fi
+        ;;
+      console)
+        # No Pages for console shape — intentional skip.
+        ;;
+    esac
+
+    # 3. OAuth secret — optional, prompted separately because it requires the
+    # user to provide the token value. Uses read -s to suppress echo (the token
+    # never appears on-screen or in shell history).
+    read -r -p "  Add CLAUDE_CODE_OAUTH_TOKEN secret now? [y/N] " secret_confirm
+    case "$secret_confirm" in
+      [yY]|[yY][eE][sS])
+        echo -n "    Paste your OAuth token (input hidden, press Enter when done): "
+        read -rs oauth_token
+        echo
+        if [ -n "$oauth_token" ]; then
+          if printf '%s' "$oauth_token" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO_FOR_GH" >/dev/null 2>&1; then
+            echo "  ${c_grn}set${c_rst}    CLAUDE_CODE_OAUTH_TOKEN secret"
+            GH_SECRET_DONE=true
+          else
+            echo "  ${c_red}FAILED${c_rst} couldn't set secret (add manually in Settings -> Secrets and variables -> Actions)"
+          fi
+          unset oauth_token
+        else
+          echo "  ${c_yel}skip${c_rst}   empty token, skipped"
+        fi
+        ;;
+      *)
+        echo "  ${c_dim}-> will need to add the secret manually (see step below)${c_rst}"
+        ;;
+    esac
+    echo
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────
 # 5. Remaining manual steps — with detected values pre-filled
 # ─────────────────────────────────────────────────────────────────
 
@@ -535,9 +659,19 @@ ${c_bold}Remaining manual steps:${c_rst}
   2. Configure the Claude GitHub App for this repo:
        https://github.com/apps/claude
 
-  3. Add CLAUDE_CODE_OAUTH_TOKEN secret to this repo:
-       Settings -> Secrets and variables -> Actions -> New repository secret
+EOF
 
+# Step 3: OAuth secret — conditionally show as done if gh auto-config set it.
+if [ "$GH_SECRET_DONE" = "true" ]; then
+  echo "  3. ${c_grn}[DONE via gh CLI ✓]${c_rst} CLAUDE_CODE_OAUTH_TOKEN secret already set."
+  echo
+else
+  echo "  3. Add CLAUDE_CODE_OAUTH_TOKEN secret to this repo:"
+  echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+  echo
+fi
+
+cat <<EOF
   4. Add this repo to your GitHub PAT's access list (Contents:write, Actions:read+write):
        https://github.com/settings/personal-access-tokens
 
