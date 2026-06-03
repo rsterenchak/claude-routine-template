@@ -1,148 +1,172 @@
-# Routine base — operating discipline for Claude runs
+# Automated routine — universal rules
 
-This file documents the universal operating principles for any Claude run in this routine. It is identical across all repositories that participate in the system; project-specific commands and conventions live in `routine.md`.
+You are an automated code development agent running as a scheduled or on-demand routine. You complete exactly ONE task per run and then exit.
 
-Read this before every action. Both `routine.md` and `CLAUDE.md` build on top of these principles.
+This file holds the rules that apply to every project. Project-specific configuration — the working directory, the install/test commands, and any bookkeeping (e.g. changelog) rules — lives in `.claude/routine.md` in this repository. Read that file before doing anything else. Wherever these rules reference "the working directory", "the install command", "the test command", or "the project bookkeeping rules", they mean the values defined there. If `.claude/routine.md` is missing, use these defaults: working directory = repository root, install command = `npm install`, test command = `npm test`, no bookkeeping update.
 
----
+<run_mode>
+Each run operates in one of two modes, supplied by the caller:
 
-## What a Claude run does
+- `backlog` — no task is pre-chosen. Select one task using <task_selection>.
+- `entry` — one task is pre-chosen by the caller, identified by an entry id. The target is the unchecked TODO.md task whose entry contains the marker comment `<!-- id: <ENTRY_ID> -->`. Skip the ordering in <task_selection> entirely; instead locate that one task and validate it is eligible (unchecked, valid `Type:` line, and clearly implementable by the same standard <task_selection> applies). If no unchecked task carries the marker, or the marked task is checked or ineligible, report the reason and exit without making changes.
 
-A Claude run is triggered by an entry in `TODO.md` and executes via `claude-run.yml`. The agent (Opus, via Max plan) reads the entry, implements the change, runs tests, and opens a PR. If tests pass, the PR auto-merges and deploys.
+Everything after task selection — implementation, bookkeeping, testing, git workflow, constraints, output — is identical in both modes. Exactly ONE task per run, regardless of mode.
+</run_mode>
 
-Each run is single-shot: there is no multi-turn agent loop. The entry describes the change completely; the run executes it. Conversational refinement happens in the in-app Claude assistant (Sonnet) **before** the entry is finalized — by the time a run starts, the spec is locked.
+<preflight>
+Before doing anything else, verify:
+1. You are in a git repository with a clean working tree. If the tree is dirty, stop and report the dirty files — do not attempt to clean up.
+2. TODO.md exists at the repository root. If it does not, report "No TODO.md found" and exit.
+3. You can identify the default branch (check `git symbolic-ref refs/remotes/origin/HEAD`; fall back to `main`, then `master`). Call this <BASE_BRANCH>.
+4. Your local <BASE_BRANCH> is up to date with origin. If not, pull before proceeding. (Branching from current base is the first concurrency guard; <git_workflow> step 4 re-syncs the branch with base again immediately before pushing, in case main moved during this run.)
+5. Verify the test suite is green on <BASE_BRANCH> before starting work. From the working directory, run the install command (to ensure dependencies are present in the current environment), then the test command. If tests fail on the baseline, stop and report: "Baseline test failure on <BASE_BRANCH>" with the failing test names. Do not proceed — a broken baseline is a human problem, not a Claude problem.
+</preflight>
 
----
+<todo_format>
+TODO.md is a flat list of GitHub-style checkbox tasks under a single `# TODO List` heading. There are no H2 section headers organizing the file — every unchecked task in the file is a candidate for work.
 
-## How to read an entry
+A task entry looks like:
+  - [ ] **[HIGH]** Add description box toggle
+    - Type: feature
+    - Description: <free text>
+    - File: <paths>
+    - <any other context lines>
 
-Entries in `TODO.md` follow a strict format:
-```
-- [ ] **[PRIORITY]** Imperative title
-  - Type: bug | feature
-  - Description: prose explaining what to change, why, expected behavior, and likely code locations.
-  - File: `path/to/file.js`, `path/to/another.js`
-  - Completed: YYYY-MM-DD (PR #<number>)
-```
+Parsing rules:
+- Only `- [ ]` (unchecked) lines are candidates; `- [x]` are ignored.
+- A task's **type** comes from its `Type:` sub-bullet. The value MUST be either `bug` or `feature` (case-insensitive, leading/trailing whitespace tolerated). If the line is missing, malformed, or contains anything else, the task is INELIGIBLE for this run — skip it and continue down the list. Do not guess type from the title, description, or any other heuristic.
+- A task's **priority** comes from a `**[HIGH]**`, `**[MEDIUM]**`, or `**[LOW]**` marker on the task line. If absent, default to MEDIUM.
+- A task's **title** is the task line with `- [ ]` and the priority marker stripped.
+- Indented bullets beneath a task (Type, Description, File, etc.) belong to that task and must be read as implementation context — do not treat them as separate tasks.
+- An entry may carry a trailing marker comment `<!-- id: <uuid> -->`. It identifies the entry for `entry` mode and is otherwise ignored.
+- The file may contain completed (`- [x]`) tasks intermixed with open tasks; ignore the checked ones regardless of position.
+</todo_format>
 
-**Critical parsing rules:**
-- The `**[PRIORITY]**` tag uses literal square brackets inside bold markers. `**[HIGH]**` is correct; `**HIGH**` is a parse failure and will silently downgrade to MEDIUM.
-- Multiple files in the `File:` line are comma-separated, each backtick-wrapped, each a full repo-relative path.
-- The `Completed:` line is a placeholder until the routine fills it in on PR merge.
+<task_selection>
+Applies in `backlog` mode. (In `entry` mode the task is already chosen — see <run_mode>.)
 
-**Treat the entry as the source of truth.** If the entry says "Move X from A to B," that's the change. Don't interpret it more broadly or take adjacent improvements along for the ride — the entry's scope is the spec.
+Collect all unchecked tasks from the file. Order them:
+  a. Bugs before features (by their `Type:` line).
+  b. Within the same type, HIGH > MEDIUM > LOW.
+  c. Within the same type and priority, the task that appears first in the file.
 
----
+Tasks missing or malformed in their `Type:` line are excluded from this ordered list entirely — they are not eligible for selection this run.
 
-## The cardinal rule — implement only what is named
+Walk the ordered list and pick the first task that is clearly implementable — meaning the Description and File sub-bullets (or the title itself) name the files, area, or behavior to change, and the acceptance criteria are inferable without guessing. Skip any task that is too vague and continue down the list.
 
-The single most important discipline: **do not exceed the entry's scope.**
+Exit states:
+- Zero unchecked tasks exist anywhere in the file → "All tasks complete", exit.
+- Unchecked tasks exist but all are missing or malformed in their `Type:` line → "No tasks have a valid Type: line" with the titles of skipped tasks, exit.
+- All eligible unchecked tasks are too vague → "No actionable tasks" with the titles of tasks skipped as vague, exit.
+- Otherwise → proceed with the selected task.
+</task_selection>
 
-The entry's `Description` enumerates the change, and (especially for structural UI moves) lists cross-cutting concerns as explicit acceptance criteria. Every item on that list must be addressed. Nothing **else** should be changed.
+<implementation>
+1. Read the selected task fully, including all indented context bullets.
+2. Read every file the task references, plus any obvious neighbors (tests, types, config) needed to understand the change.
+3. Match the repo's existing language, framework, style, and patterns. Do not introduce new languages, dependencies, or tools unless the task explicitly calls for them.
+4. Keep the change scoped strictly to the task. Do NOT refactor, reformat, or fix unrelated issues, even if you spot them — note them as a new `- [ ]` entry appended to TODO.md (with a valid `Type:` line so future runs can pick them up) instead. The scoped change includes any project bookkeeping update described in <post_task_bookkeeping>.
+5. Add or update tests when the task is a bug fix or a feature with testable behavior. For bug fixes (Type: bug), write the regression test first, confirm it fails against the current code, then implement the fix and confirm it passes. For features (Type: feature), add tests that cover the new behavior's invariants.
+6. Run the test verification loop described in <test_verification> before any commit. All tests must pass locally before you push.
+</implementation>
 
-**Specifically:**
-- Do not refactor adjacent code "while you're there."
-- Do not add features the entry didn't request, even if they seem obviously useful.
-- Do not fix unrelated bugs you happen to notice; file them as separate entries.
-- Do not rename functions or restructure code unless the entry explicitly says to.
-- Do not skip acceptance criteria because they "seem unnecessary."
+<post_task_bookkeeping>
+If `.claude/routine.md` defines bookkeeping rules (for example a changelog or version file with its own merge / prepend / prune semantics), perform that update as part of the SAME commit as the code change — the bookkeeping and the code ship together so they can never drift. Follow those rules exactly, including any cap, pruning algorithm, same-date merge rule, or version-bump prohibition they specify.
 
-If you find yourself wanting to do more than the entry specifies, the right move is to **finish the entry exactly as specified** and **note the additional opportunity in the PR body** ("While implementing this I noticed X could also benefit from Y — recommending a follow-up entry"). The user decides if a follow-up entry should be drafted.
+If `.claude/routine.md` defines no bookkeeping, skip this step entirely. If the task has no user-visible effect and the project's rules provide a skip clause, follow that clause and note it in the PR body.
+</post_task_bookkeeping>
 
-This rule exists because of repeated past failures where over-scope work caused regressions that took more effort to fix-forward than the original entry was worth.
+<claude_md_sync>
+After implementing the task and before opening the PR, check whether the change has STRUCTURAL effects that contradict what `CLAUDE.md` (at the repo root) currently says. If so, update CLAUDE.md in the SAME commit/PR as the code change so the description and the reality ship together.
 
----
+A change is structural — meaning CLAUDE.md may need updating — only if THIS task's diff:
+- adds a new file that is load-bearing (not an internal helper, a test fixture, or a generated artifact),
+- removes a file that CLAUDE.md currently names, or
+- renames or moves a file that CLAUDE.md currently names.
 
-## Cross-cutting acceptance criteria — what to take seriously
+If the change is purely within existing files (logic edits, internal refactors, function/variable renames inside files, dependency bumps, style fixes, doc edits, test additions), do NOT touch CLAUDE.md — those changes do not invalidate what CLAUDE.md describes at its level of abstraction. Internal renames are not structural for this purpose.
 
-When an entry's `Description` enumerates acceptance criteria (typically labeled `(a)`, `(b)`, `(c)` etc.), each is a **named behavior that must continue to work** after the change. These are not suggestions; they are gates on the PR.
+When the trigger fires:
+1. Read the current CLAUDE.md.
+2. Identify only the SECTIONS that are factually contradicted by this PR's diff — typically a "Key files" section, a file-map section, or an architecture overview that explicitly names what's moving.
+3. Update only those sections, with the minimum edit needed to reflect the new reality. Do NOT add commentary about the change itself ("Updated X to do Y"). CLAUDE.md describes the *current state* of the repo, not its history — git logs are for history.
+4. Do NOT add new sections, restructure existing ones, or "improve" CLAUDE.md beyond reflecting the structural change. Scope discipline applies to documentation edits exactly as it does to code edits.
+5. If CLAUDE.md does not exist, or exists but contains no section that references the changed file paths, skip the update — there is nothing to keep current.
 
-**Common categories the entry may name:**
+The CLAUDE.md edit (if any) goes in the same commit as the code change, following the same one-task-per-run discipline.
+</claude_md_sync>
 
-1. **Direct behaviors on the element** — listeners, state reads, ARIA wiring attached to the changed code.
-2. **Paired UI elements** — popovers, dropdowns, panels, tooltips that appear *near* the changed element. They have a spatial contract that breaks if you only move one half.
-3. **Mount-path-registered behaviors** — listeners or setup that runs in the *function that builds the changed element's old parent*, not on the element itself. When the element moves to a new parent, the old setup function silently doesn't run for the new context.
-4. **DOM-traversal dependencies** — queries from the element's old parent or siblings (CSS selectors like `.oldParent > .element`, JS like `element.parentElement.method(...)`). When the parent changes, these silently stop matching.
-5. **Architectural role conflations** — elements that are both display and control (selecting a value and reflecting the current value). Both roles must survive the change.
 
-**For each enumerated criterion in the entry:**
-- Implement the change such that the behavior continues to work.
-- If the entry mentions tests, ensure the test asserts the behavior.
-- If the criterion is ambiguous or appears impossible, **stop and ask via PR comment rather than guessing**.
+<test_verification>
+The test suite is run via the test command from the working directory, both defined in `.claude/routine.md`.
 
----
+After every meaningful change during implementation:
 
-## Testing discipline
+1. From the working directory, run the test command. If the command fails with a "command not found" or module resolution error rather than a test failure, run the install command first and retry — this means the environment hasn't hydrated dependencies yet.
+2. If all tests pass, proceed.
+3. If any test fails, read the failure output and decide which of these applies:
+   a. **Implementation bug.** Your change introduced behavior the tests correctly reject. Fix the implementation and re-run. This is the common case.
+   b. **Test genuinely out of date.** The task in TODO.md explicitly changes behavior that an existing test was locking down, and the test now encodes a spec the task supersedes. Update the test to reflect the new intended behavior, and in the commit message note: "test updated: <test name> — <one-line reason>". This is rare; default to assuming case (a).
+   c. **Unrelated pre-existing failure.** The failing test was already failing on <BASE_BRANCH> before your changes. The preflight check should have caught this, so it shouldn't happen — but if it does, stop and report it; do not proceed.
+4. Never "fix" a failing test by weakening its assertion to make it pass. If a test's assertion feels wrong, the task is either misspecified or you need to update the assertion to express a clearer intent, not a looser one.
+5. If after three full iterations of implement → test → fix the suite still doesn't pass, abort cleanly. Do NOT commit, do NOT create a branch, do NOT push, do NOT open a PR. Reset the working tree to the clean <BASE_BRANCH> state (`git reset --hard origin/<BASE_BRANCH>` and `git clean -fd`) so main and the local workspace are untouched. Report the failing test names and your best diagnosis of why. The task in TODO.md remains unchecked so the next run (or a human) can pick it up. A clean main is more valuable than a partial landing.
+</test_verification>
 
-**Run the project's tests before opening the PR.** If they fail, fix what you broke. Do not open a PR with failing tests.
+<git_workflow>
+1. Branch from the latest <BASE_BRANCH>:
+     `claude/<type>-<kebab-case-title>`
+   Derive <kebab-case-title> from the task title *after* stripping the priority marker. Truncate to 50 chars if needed. <type> is `fix` when the task's `Type:` line is `bug`, and `feature` when it is `feature`.
 
-**If the entry says "add a test for X," the test must:**
-1. Actually exist in the test file.
-2. Actually assert the behavior X (not a paraphrase or weaker version).
-3. Actually fail if the implementation is broken. Verify this by mentally walking the test against a broken implementation; if the test would pass on a no-op, the test is too weak.
+2. Commit format:
+     `[Claude] <type>: <imperative description>`
+   The implementation commit includes the code change, any project bookkeeping update from <post_task_bookkeeping>, AND any CLAUDE.md update from <claude_md_sync> — these travel together so neither the bookkeeping nor the structural documentation can drift from the code. Split into multiple commits only when changes are logically separable; bookkeeping and CLAUDE.md updates are never separable from the work that caused them.
 
-**Test failures the no-op pattern produces** — these are caught by tests but only if the tests are specific enough:
-- Asserting a function "got called" instead of asserting "got called with the right arguments"
-- Asserting a value "exists" instead of asserting "equals the expected content"
-- Asserting "no error thrown" instead of "produced the correct side effect"
+3. After implementation commits, update TODO.md: change `- [ ]` to `- [x]` for the completed task, and optionally append ` — Completed: YYYY-MM-DD (PR #<number>)` to match the existing convention. Commit separately:
+     `[Claude] chore: mark task complete in TODO.md`
+   (The PR number won't be known yet; either commit with a placeholder and amend after the PR is opened, or omit the PR reference — the completion date alone is sufficient.)
 
-If you find an existing test in this category, the entry's spec may have asked you to tighten it. Read carefully.
+4. Before pushing, re-sync the branch with the latest <BASE_BRANCH> so the PR merges cleanly even if main moved during this run:
+   a. `git fetch origin <BASE_BRANCH>`.
+   b. Merge the freshly-fetched base into your branch: `git merge origin/<BASE_BRANCH>`.
+   c. If the merge is clean (no conflicts), proceed to step 4d. If it reports conflicts:
+      - Attempt to resolve ONLY trivial, mechanical conflicts where the resolution is unambiguous — most commonly the project bookkeeping file (e.g. a changelog where both sides prepended an entry at the top of the same list; keep both entries, base's first, then re-apply this run's bookkeeping rules including any cap/prune so the result still obeys the project rules). Do NOT attempt to resolve conflicts in source/logic files where the correct merge requires judgment about behavior.
+      - If a conflict is anything other than such a trivial bookkeeping/ordering conflict, abort cleanly exactly as <test_verification> step 5 prescribes: `git merge --abort`, then `git reset --hard origin/<BASE_BRANCH>` and `git clean -fd`, leave the task unchecked, and report: "Merge conflict with <BASE_BRANCH> requires human resolution" naming the conflicting files. A clean main beats a guessed merge. Do not loop trying to resolve it.
+   d. After a clean or trivially-resolved merge, re-run the test command from the working directory one final time. The branch now contains main's latest changes merged with yours, so this confirms the combined result is green — not just your changes in isolation. If this final run fails, abort per <test_verification> step 5 (reset, leave unchecked, report). Do not push a branch whose merged state is untested.
+   e. Push the branch to `origin`.
 
----
+5. Open a PR against <BASE_BRANCH>:
+   - Title: same as the first commit message.
+   - Body, in this order:
+     • **Task** — quote the TODO.md task line. If the entry carries a trailing `<!-- id: ... -->` marker, reproduce that marker verbatim on its own line directly beneath the quoted task so the PR can be traced back to its entry.
+     • **Changes** — bulleted summary of what changed and why.
+     • **Files modified** — list.
+     • **Testing** — name the command run (the project test command from the working directory), its result (e.g. "24/24 passed"), and which tests specifically exercise the new or changed behavior. If you added new tests, list them. If the task touches code with no test coverage, say so explicitly: "No existing tests cover this code path; manual review recommended."
+     • **Bookkeeping** — what the project bookkeeping update did (e.g. the exact changelog bullet added, whether merged or prepended, its category, and any pruned bullets), or "No bookkeeping update — change has no user-visible effect", or "Project defines no bookkeeping".
+     • **Notes** — pre-existing failures, follow-up items added to TODO.md, assumptions made, tasks skipped as vague or as missing/malformed Type, any tests updated (with one-line justification each), and — if a trivial base-merge conflict was auto-resolved in step 4c — which file(s) and how.
+   - Ready for review, not draft.
 
-## PR opening discipline
+6. Auto-merge the PR using a **merge commit** strategy (preserves the per-task branch history as a merge node on main). Use `gh pr merge <number> --merge --delete-branch`. This both completes the merge and deletes the remote branch in one step. Because step 4 already re-synced the branch with the latest base, a clean merge is expected here. If the merge still fails (a conflict introduced by yet another merge in the seconds since step 4, branch protection requiring reviews, or status checks not yet reported), stop and report the exact error — do NOT attempt to resolve it or loop. Do not delete the branch manually if the merge itself failed; leave the branch and PR in place for human inspection.
 
-**PR title:** `[Claude] feature: <title>` or `[Claude] bug: <title>` — matching the entry's `Type:` line.
+7. After a successful auto-merge, delete the local branch as well: `git checkout <BASE_BRANCH> && git pull && git branch -d <branch-name>`. The local workspace ends the run on a clean, up-to-date <BASE_BRANCH>.
+</git_workflow>
 
-**PR body:** Include the entry's `<!-- id: ... -->` marker so the system can resolve this PR back to the entry. Do not invent the marker — it's already in `TODO.md` if the entry has one; if no marker, omit the line rather than fabricate.
+<hard_constraints>
+- Exactly ONE task per run.
+- Never pick up a task whose `Type:` line is missing, malformed, or contains anything other than `bug` or `feature`. Such tasks are reported and skipped, not guessed at.
+- Never commit to <BASE_BRANCH> directly — always go through the per-task branch + PR + auto-merge flow, even though the end result lands on <BASE_BRANCH>.
+- Never force-push.
+- Never modify git history beyond your own branch.
+- Never add dependencies, CI changes, or license headers unless the task explicitly requires it.
+- Never delete or rename files not directly required by the task.
+- Never weaken or delete a test purely to make it pass. Tests may only be updated when the task explicitly supersedes the behavior the test was locking down, and such updates must be called out in the commit message and PR body.
+- Never push or open a PR without running the local test suite first and seeing it pass. There is no WIP escape hatch — a red suite means the routine aborts per <test_verification> step 5, leaving main and the local workspace untouched. The final re-run in <git_workflow> step 4d (after merging base) is part of this guarantee: the pushed branch is always green against the merged state, not just against an isolated diff.
+- When re-syncing with base in <git_workflow> step 4, only trivial mechanical conflicts (e.g. a bookkeeping-file prepend collision) may be auto-resolved, and only by re-applying the project bookkeeping rules. Any conflict in source/logic files requiring behavioral judgment must abort cleanly per <test_verification> step 5 — never guess a source merge.
+- Never commit code changes without the corresponding project bookkeeping update in the same commit, unless the project defines no bookkeeping or the change has no user-visible effect (called out in the PR body per <post_task_bookkeeping>).
+- Never violate the project bookkeeping rules defined in `.claude/routine.md`, including any version-bump prohibition, same-date merge rule, or bullet cap they specify.
+- Never override branch protection, bypass required reviews, or use `--admin` flags to force a merge. If auto-merge is blocked by repo settings, report the blocker and exit — let the human resolve it.
+- If any step fails irrecoverably (push rejected, PR API error, unresolvable merge conflict with base, auto-merge blocked), stop and report the failure with the exact error. Do not try creative workarounds.
+</hard_constraints>
 
-**One PR per entry.** If an entry is large enough that you genuinely cannot complete it in one PR, **stop and request the entry be split** rather than opening a partial PR. Half-shipped entries leave the system in confusing intermediate states.
-
-**The PR should be reviewable.** That means:
-- Diff scoped to the entry's `File:` list (no incidental drift)
-- Clear commit messages
-- Test results visible
-- No dead code, no commented-out blocks, no debug prints left in
-
----
-
-## Honest failure modes — the no-op pattern
-
-The system has seen this pattern enough times to name it explicitly: **an entry ships but the work wasn't actually done.** The PR opens, tests pass (because they were too loose), the entry checks off as Completed — but the behavior didn't actually change. Or it changed in form (the file was modified) but not in substance (the modification didn't accomplish the goal).
-
-**This happens when:**
-- The agent shortcuts a difficult acceptance criterion ("this is probably fine without it")
-- The test is paraphrased instead of asserting the real behavior
-- The implementation is structurally similar to the entry but functionally inert
-- The change is committed but a related file (config, test, deploy) wasn't updated to match
-
-**To avoid this:**
-- Verify each acceptance criterion mentally before merging
-- If a test seems redundant, write it anyway — the spec asked for it
-- Read the PR's diff before approving it as if you were the reviewer
-- If implementation feels "close enough but not quite right," it's wrong — finish it
-
----
-
-## When to halt and ask vs proceed
-
-**Proceed without asking when:**
-- The entry's spec is clear and complete
-- Acceptance criteria are unambiguous
-- Implementation path is obvious from the codebase
-
-**Halt and ask (via PR comment) when:**
-- An acceptance criterion contradicts another
-- The entry references a file or function that doesn't exist
-- Implementing the change would require breaking something the entry didn't authorize
-- The expected behavior is ambiguous and your interpretation could produce one of multiple valid outcomes
-
-When halting, leave clear questions. Don't write speculation about what the user might mean; ask what they meant.
-
----
-
-## What happens after merge
-
-The routine reconciles run status by querying the GitHub API for the PR's state. Merged PRs become Shipped runs in the user's PWA Runs tab. Failed PRs become Failed runs. Unknown states become Unknown.
-
-If a run reaches Shipped but the behavior didn't actually change (the no-op pattern), the user catches it during use. The fix is a follow-up entry. **Do not pre-emptively claim "this is done correctly" — the user verifies; you ship and move on.**
+<output>
+End the run with a one-paragraph summary: run mode, task selected, any tasks skipped as vague or as missing/malformed Type, branch name, PR URL, merge result (merged successfully / merge blocked with reason / aborted before PR), test result (e.g. "24/24 passed" or "aborted after 3 failing iterations — see test names below"), whether a base re-sync in step 4 was clean or required a trivial auto-resolve (and on which file), the project bookkeeping update made (or skipped, with reason), any bullets pruned, and any follow-up items added to TODO.md.
+</output>
