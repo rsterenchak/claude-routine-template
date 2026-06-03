@@ -65,6 +65,49 @@ After all checkboxes are done, **delete this entire "Onboarding checklist" secti
 
 ---
 
+<!-- =========================== ASSIGNMENT CONTEXT — fill in if this is coursework =========================== -->
+<!-- This block is for coursework or graded assignments. If this  -->
+<!-- repo is a personal project, delete the entire block (from    -->
+<!-- the ASSIGNMENT CONTEXT marker above to the END marker below).-->
+<!-- The chat assistant auto-loads CLAUDE.md every turn, so once   -->
+<!-- filled, these constraints persist across the whole            -->
+<!-- assignment — you don't have to re-paste the spec each time.   -->
+
+## Assignment requirements
+
+<!-- Paste or summarize the assignment spec / rubric / problem    -->
+<!-- statement here. What does this program need to do? What       -->
+<!-- inputs does it accept, what outputs does it produce, what     -->
+<!-- edge cases must it handle? Be specific — Sonnet and the       -->
+<!-- claude-run agent will both read this verbatim.                -->
+
+(replace this line with the assignment spec)
+
+## Constraints and conventions for this assignment
+
+<!-- Constraints specific to this course / professor / assignment. -->
+<!-- Examples: "Must use Dictionary, not List", "No LINQ", "Input  -->
+<!-- validation per spec section 2.3", "All public methods must    -->
+<!-- have XML doc comments", "Use only language features covered   -->
+<!-- in lectures through Week 5".                                  -->
+<!--                                                                -->
+<!-- These are honored automatically by claude-run when            -->
+<!-- implementing entries, because the agent reads CLAUDE.md as    -->
+<!-- part of its context. You don't have to remind it per-entry.   -->
+
+(list constraints, or write "none" if there are none)
+
+## Submission and grading
+
+<!-- Due date, submission format (zip? PR? canvas upload?), what's -->
+<!-- being graded (correctness only? style? tests? performance?),  -->
+<!-- and any submission-specific notes.                            -->
+
+(fill in submission details)
+<!-- =========================== END ASSIGNMENT CONTEXT =========================== -->
+
+---
+
 ## System overview — how the Claude routine works
 
 This repo is wired into a broader automation pipeline. Understanding the pipeline matters because it shapes what kinds of changes Claude can make and how.

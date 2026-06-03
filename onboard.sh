@@ -278,6 +278,28 @@ case "$shape_confirm" in
 esac
 echo
 
+# ─────────────────────────────────────────────────────────────────
+# 2b. Project purpose — personal vs assignment
+# This drives CLAUDE.md customization. The template ships with an
+# ASSIGNMENT CONTEXT block (sections for spec, constraints, submission
+# details). For personal projects, that block gets stripped after the
+# CLAUDE.md is written. For coursework, it stays for the user to fill in.
+# Defaults to "personal" — the cautious choice, since stripping an unused
+# block is reversible (user can paste it back) but cluttering every
+# personal repo with unused coursework sections is friction.
+# ─────────────────────────────────────────────────────────────────
+echo "${c_bold}What's this project for?${c_rst}"
+echo "  ${c_dim}Personal: a project you're building for yourself, work, or open source.${c_rst}"
+echo "  ${c_dim}Assignment: coursework or a graded assignment with a spec, constraints, due date.${c_rst}"
+read -r -p "  [P]ersonal (default) / [A]ssignment: " purpose_pick
+case "$purpose_pick" in
+  ""|[pP]|[pP][eE][rR]*) PURPOSE="personal" ;;
+  [aA]|[aA][sS][sS]*) PURPOSE="assignment" ;;
+  *) PURPOSE="personal"; echo "  ${c_yel}note${c_rst}  unrecognized response, defaulting to personal" ;;
+esac
+echo "  -> $PURPOSE"
+echo
+
 # Assemble the active file list. Universal files for every shape; Node shapes
 # also get the npm test workflow + manifest generators; then the shape-specific
 # workflow. The console shape skips NODE_FILES entirely (no npm test, no
@@ -349,6 +371,35 @@ done
 echo
 echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
 echo
+
+# ─────────────────────────────────────────────────────────────────
+# 4a. CLAUDE.md customization — strip ASSIGNMENT CONTEXT if personal
+# The CLAUDE.md template ships with an ASSIGNMENT CONTEXT block (sections
+# for spec, constraints, submission details). For personal projects, strip
+# that block — it's clutter the user doesn't need. For coursework, leave
+# it in for the user to fill in (the auto-loaded PROJECT CONTEXT then
+# carries the assignment spec to every chat turn).
+# Only runs when the file was actually written this run (not skipped as
+# already-existing) AND purpose is personal.
+# ─────────────────────────────────────────────────────────────────
+CLAUDE_MD_TARGET="$TARGET/CLAUDE.md"
+if [ "$PURPOSE" = "personal" ] && [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this is coursework" "$CLAUDE_MD_TARGET"; then
+  # Delete the block (start marker through END marker, inclusive).
+  # Temp-file pattern is portable across GNU and BSD sed.
+  sed '/ASSIGNMENT CONTEXT — fill in if this is coursework/,/END ASSIGNMENT CONTEXT/d' \
+      "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
+      && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
+  # Cleanup: deletion may have left two consecutive '---' separators where
+  # the block was bordered by them. Collapse to one.
+  awk 'BEGIN{prev_sep=0}
+       /^---$/ { if (prev_sep) next; prev_sep=1; print; next }
+       /^$/ { print; next }
+       { prev_sep=0; print }' \
+      "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
+      && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
+  echo "  ${c_dim}stripped ASSIGNMENT CONTEXT block from CLAUDE.md (personal project)${c_rst}"
+  echo
+fi
 
 REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "<owner>/<repo>")"
 
