@@ -93,6 +93,27 @@ echo "${c_bold}Onboarding target:${c_rst} $TARGET"
 echo
 
 # ─────────────────────────────────────────────────────────────────
+# 1b. Already-onboarded detection
+# .claude/routine.md is the distinctive signal — only routine-onboarded repos
+# have it. TODO.md alone is too common (many repos have one independently).
+# If detected, prompt cautiously: re-running is safe (skip-existing handles
+# duplicates) but is usually accidental, and the noise wastes a minute.
+# Re-running IS legitimate when picking up new template files added after
+# first onboarding — so 'y' to continue is allowed.
+# ─────────────────────────────────────────────────────────────────
+if [ -f "$TARGET/.claude/routine.md" ]; then
+  echo "${c_yel}Note:${c_rst} this repo looks already onboarded — found ${c_bold}.claude/routine.md${c_rst}."
+  echo "  Re-running is safe (the script never overwrites existing files), but it's"
+  echo "  usually accidental. Continue only if you want to pick up template files added"
+  echo "  since the first onboarding."
+  read -r -p "  Continue anyway? [y/N] " reonboard_confirm
+  case "$reonboard_confirm" in
+    [yY]|[yY][eE][sS]) echo "  -> continuing"; echo ;;
+    *) echo "  Aborted. No changes made."; exit 0 ;;
+  esac
+fi
+
+# ─────────────────────────────────────────────────────────────────
 # 2. Detect project shape
 # ─────────────────────────────────────────────────────────────────
 # Find package.json — check root first, then one level down (common for
@@ -523,6 +544,8 @@ ${c_bold}Remaining manual steps:${c_rst}
   5. Add to todo-injector-worker ALLOWED_TARGETS in src/index.js:
        { repo: "$REPO_GUESS", filePath: "TODO.md", srcPrefix: "$SRC_DIR_VAL" }
      Then: cd todo-injector-worker && npm run deploy
+     (Without this step, the repo won't appear in the chat's workspace pill —
+      the worker is the source of truth for which repos are reachable.)
 
   6. Verify the manifest publishes after first deploy, then inject a test entry
      and confirm claude-run.yml picks it up.
