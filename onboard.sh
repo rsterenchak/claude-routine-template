@@ -14,11 +14,19 @@
 #   3. Shows you a plan of what it will create and what it detected.
 #   4. On your confirmation, writes ONLY the files that don't already exist
 #      (never clobbers — existing files are reported and skipped).
-#   5. Prints a checklist of remaining manual steps with detected values
+#   5. Inside a Codespace, detects broken cross-repo git auth (the pinned
+#      GITHUB_TOKEN is scoped to the launching repo, not the target) and
+#      offers to swap git's credential helper to gh's full-user credentials
+#      so the upcoming push works.
+#   6. Offers to commit + push the files the script just created — staged
+#      selectively from a tracked list so the user's other untracked files
+#      are left alone. Declining prints the equivalent manual commands.
+#   7. Prints a checklist of remaining manual steps with detected values
 #      pre-filled where possible.
 #
 # Requirements: bash, curl, standard unix tools (grep, sed). No npm deps.
 # Network access required (fetches from raw.githubusercontent.com).
+# For the Codespace auth-fix path: gh CLI (preinstalled in Codespaces).
 #
 # Design decisions (see the conversation that produced this):
 #   - Skip-existing, never clobber: safest default. If a file exists, the
@@ -27,6 +35,8 @@
 #     This script pulls current versions so improvements propagate.
 #   - Detect-then-confirm: auto-detection is a convenience, but you approve
 #     the plan before anything is written.
+#   - Selective git add: only files this run created are staged for commit.
+#     Other untracked content in the target stays untouched.
 
 set -euo pipefail
 
@@ -69,6 +79,11 @@ BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
 TEMPLATE_FILES=()  # assembled after shape detection
+
+# Files actually created by THIS run (not skipped as already-existing). Used
+# later for selective `git add` so the auto-commit-push step never sweeps up
+# files the script didn't author.
+files_created=()
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -415,6 +430,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   if curl -fsSL "${RAW_BASE}/${src_rel}" -o "$dest"; then
     echo "  ${c_grn}created${c_rst} $dest_rel"
     created=$((created+1))
+    files_created+=("$dest_rel")
   else
     echo "  ${c_red}FAILED${c_rst}  $dest_rel  (could not fetch from template — check network / template repo)"
     failed=$((failed+1))
@@ -639,6 +655,177 @@ if [ "$USE_GH" = "true" ]; then
     esac
     echo
   fi
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# 4d. Codespace auth auto-fix
+# Fresh Codespaces have a pinned $GITHUB_TOKEN env var that's scoped to the
+# repo the Codespace was launched from. When onboarding a DIFFERENT target
+# repo (the common case for the routine-template Codespace), git push 403s
+# because the scoped token doesn't have write access to the target. The fix
+# is a small sequence (unset GITHUB_TOKEN -> gh auth login if needed ->
+# gh auth setup-git to swap the credential helper), which used to be a
+# diagnostic dance the user had to run by hand.
+#
+# Detection: $CODESPACES=true AND `git ls-remote --heads origin` against the
+# target fails. Both signals must fire — non-Codespace environments skip the
+# whole block, and Codespaces where push already works (target == launching
+# repo, or auth has been previously swapped) also skip.
+#
+# Fix sequence is gated behind a Y/n prompt so the user can opt out and
+# handle auth themselves if their setup is unusual. On Y, the script runs
+# the sequence and re-verifies that push works before continuing to the
+# commit-and-push step. On failure, prints a diagnostic and falls through
+# to the commit-and-push step anyway (which will print the actual git error
+# if push still fails — at that point the user has full context to recover).
+# ─────────────────────────────────────────────────────────────────
+AUTH_FIXED=false
+if [ "${CODESPACES:-}" = "true" ]; then
+  # Quick capability probe — does ls-remote work against the target's origin?
+  # Wrap in `|| true` so set -e doesn't kill the script on the expected
+  # failure case (broken auth).
+  ls_remote_ok=true
+  git -C "$TARGET" ls-remote --heads origin >/dev/null 2>&1 || ls_remote_ok=false
+
+  if [ "$ls_remote_ok" = "false" ]; then
+    echo "${c_yel}Codespace auth note:${c_rst} this Codespace's pinned GITHUB_TOKEN doesn't have"
+    echo "  write access to the target repo. ${c_bold}git push will fail${c_rst} until git's credentials"
+    echo "  are swapped to your full user credentials via gh."
+    echo "  ${c_dim}Standard fix: unset GITHUB_TOKEN, gh auth login (if needed), gh auth setup-git.${c_rst}"
+    read -r -p "  Fix Codespace auth now? [Y/n] " auth_confirm
+    case "$auth_confirm" in
+      ""|[yY]|[yY][eE][sS])
+        echo "  ${c_dim}-> clearing GITHUB_TOKEN for this script's subprocess...${c_rst}"
+        unset GITHUB_TOKEN
+
+        # Check whether gh is already authenticated. If yes, we just need to
+        # swap the credential helper. If no, launch the interactive login.
+        if gh auth status >/dev/null 2>&1; then
+          echo "  ${c_dim}-> gh is already authenticated as $(gh api user --jq .login 2>/dev/null || echo 'user'); skipping login${c_rst}"
+        else
+          echo "  ${c_dim}-> gh not authenticated — launching gh auth login (follow the prompts)${c_rst}"
+          echo
+          if ! gh auth login; then
+            echo
+            echo "  ${c_red}gh auth login failed.${c_rst} Falling through to commit/push step — if the push"
+            echo "  fails, run gh auth login manually and re-run this script (already-onboarded detection"
+            echo "  will let you skip past file creation)."
+            echo
+          fi
+        fi
+
+        # Swap git's credential helper to gh's full-user credentials. This is
+        # the step that actually unblocks push — gh auth login alone doesn't
+        # touch git's config.
+        if gh auth setup-git 2>/dev/null; then
+          echo "  ${c_grn}swapped${c_rst} git credential helper to gh (writes persist for this Codespace)"
+          # Re-verify
+          if git -C "$TARGET" ls-remote --heads origin >/dev/null 2>&1; then
+            echo "  ${c_grn}verified${c_rst} target repo is now reachable for git push"
+            AUTH_FIXED=true
+          else
+            echo "  ${c_yel}note${c_rst}    credential helper swapped but ls-remote still fails — push may still 403"
+            echo "          (most common cause: gh-authed user doesn't have write access to $REPO_GUESS)"
+          fi
+        else
+          echo "  ${c_red}FAILED${c_rst} gh auth setup-git couldn't update git config"
+          echo "          Manual recovery:"
+          echo "          ${c_dim}unset GITHUB_TOKEN${c_rst}"
+          echo "          ${c_dim}git config --global --unset credential.helper${c_rst}"
+          echo "          ${c_dim}gh auth setup-git${c_rst}"
+        fi
+
+        echo
+        echo "  ${c_dim}Persistence note: GITHUB_TOKEN will reset on every new terminal in this${c_rst}"
+        echo "  ${c_dim}Codespace. To make the unset stick across sessions, add it to ~/.bashrc:${c_rst}"
+        echo "  ${c_dim}  echo 'unset GITHUB_TOKEN' >> ~/.bashrc${c_rst}"
+        echo
+        ;;
+      *)
+        echo "  ${c_dim}-> skipping auth fix. The commit-and-push step below will likely 403${c_rst}"
+        echo "  ${c_dim}   on push — if it does, the manual sequence is in the README's Codespace section.${c_rst}"
+        echo
+        ;;
+    esac
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# 4e. Auto-commit-and-push the scaffolded files
+# Stages only the files this run created (tracked in files_created), so any
+# other untracked files in the target repo are left untouched. Detects the
+# target's current branch via symbolic-ref; falls back to "main" if HEAD is
+# detached. Prompts before staging so the user can decline and review.
+#
+# On decline, prints the equivalent manual commands (with the actual file
+# list and detected branch baked in) for copy-paste use later.
+#
+# On accept, runs the three commands and surfaces git's output verbatim so
+# diagnostics aren't hidden. A failed push doesn't abort the script — the
+# Remaining Manual Steps block still prints, and the user can re-attempt.
+# ─────────────────────────────────────────────────────────────────
+if [ ${#files_created[@]} -gt 0 ]; then
+  # Detect target branch
+  TARGET_BRANCH="$(git -C "$TARGET" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+
+  # Compose the manual-recovery command block once, used in both branches.
+  manual_cmds=$(printf '       cd %s\n' "$TARGET"
+                printf '       git add %s\n' "${files_created[*]}"
+                printf '       git commit -m "Scaffold Claude routine pipeline"\n'
+                printf '       git push origin %s\n' "$TARGET_BRANCH")
+
+  echo "${c_bold}Commit + push${c_rst}"
+  echo "  ${#files_created[@]} files ready to commit. Will stage ONLY the files this run created"
+  echo "  (other untracked files in the target are left alone). Target branch: ${c_bold}$TARGET_BRANCH${c_rst}"
+  read -r -p "  Commit and push the scaffolded files to $TARGET_BRANCH now? [Y/n] " commit_confirm
+  case "$commit_confirm" in
+    ""|[yY]|[yY][eE][sS])
+      # Stage only files this run authored. Use -C so we don't have to cd.
+      stage_failed=false
+      for rel in "${files_created[@]}"; do
+        git -C "$TARGET" add -- "$rel" || stage_failed=true
+      done
+      if [ "$stage_failed" = "true" ]; then
+        echo "  ${c_red}FAILED${c_rst} couldn't stage one or more files. Manual recovery:"
+        echo "$manual_cmds"
+      else
+        # Commit. Allow empty message to fall through to git's default editor only
+        # if the canned message would be a no-op (already-committed case).
+        if git -C "$TARGET" diff --staged --quiet; then
+          echo "  ${c_dim}nothing to commit (files already in a previous commit, or no changes staged)${c_rst}"
+        else
+          if git -C "$TARGET" commit -m "Scaffold Claude routine pipeline" >/dev/null; then
+            echo "  ${c_grn}committed${c_rst} ${#files_created[@]} files to $TARGET_BRANCH"
+          else
+            echo "  ${c_red}FAILED${c_rst} git commit failed. Manual recovery:"
+            echo "$manual_cmds"
+          fi
+        fi
+
+        # Push. Don't suppress output — diagnostics from a failed push are
+        # what the user needs.
+        echo "  ${c_dim}-> pushing to origin/$TARGET_BRANCH...${c_rst}"
+        if git -C "$TARGET" push origin "$TARGET_BRANCH"; then
+          echo "  ${c_grn}pushed${c_rst}    origin/$TARGET_BRANCH is now in sync"
+        else
+          echo
+          echo "  ${c_red}push failed${c_rst} (see git output above for the actual error)"
+          echo "  Most common causes after this point:"
+          echo "    - gh-authed user doesn't have write access to $REPO_GUESS"
+          echo "    - branch protection rules require a PR"
+          echo "    - the auth swap didn't fully land (try a fresh terminal: 'unset GITHUB_TOKEN && exec bash')"
+          echo "  Manual retry:"
+          echo "$manual_cmds"
+        fi
+      fi
+      echo
+      ;;
+    *)
+      echo "  ${c_dim}-> skipping commit + push. To do it manually:${c_rst}"
+      echo "$manual_cmds"
+      echo
+      ;;
+  esac
 fi
 
 # ─────────────────────────────────────────────────────────────────
