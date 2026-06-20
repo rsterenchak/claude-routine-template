@@ -1,0 +1,74 @@
+name: Tests
+
+# ─────────────────────────────────────────────────────────────────
+# DESKTOP / .NET (WinForms or WPF) variant of the test workflow.
+# Used for C#/.NET desktop GUI projects that target the Windows Desktop SDK:
+# net*-windows TargetFramework, <UseWindowsForms>true</UseWindowsForms>, or
+# <UseWPF>true</UseWPF>. These do NOT build on Linux — WinForms/WPF need the
+# Windows Desktop targeting packs, which ship with the .NET SDK only on Windows.
+# So this variant runs on windows-latest. Otherwise identical to the console
+# variant (test-dotnet.yml): no web deploy, no manifest publishing.
+#
+# The onboard script fetches this as test.yml into the target repo and fills
+# {{WORKING_DIR}} and {{DOTNET_VERSION}}.
+#
+# Each step discovers the solution/project file at runtime (a repo with more
+# than one .csproj/.sln makes a bare `dotnet restore` ambiguous — MSB1011 — so
+# we pass an explicit target). Prefers a .sln; falls back to the working dir.
+#
+# Behavior: always builds (a compile failure fails CI). Runs `dotnet test` ONLY
+# when a test project is present, so a fresh assignment with no tests yet still
+# passes CI on compile alone. Add a test project later and tests run automatically.
+#
+# Shell note: GitHub's windows runners default the `run:` shell to PowerShell.
+# The job pins bash (Git Bash is preinstalled) so the find/grep discovery steps —
+# shared verbatim with the console variant — behave identically across both.
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+  pull_request:
+    paths-ignore:
+      - 'TODO.md'
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '{{DOTNET_VERSION}}'
+
+      - name: Restore
+        working-directory: {{WORKING_DIR}}
+        run: |
+          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          echo "Restoring ${TARGET:-.}"
+          dotnet restore "${TARGET:-.}"
+
+      - name: Build
+        working-directory: {{WORKING_DIR}}
+        run: |
+          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          echo "Building ${TARGET:-.}"
+          dotnet build "${TARGET:-.}" --no-restore --configuration Release
+
+      - name: Test (only if a test project exists)
+        working-directory: {{WORKING_DIR}}
+        run: |
+          if find . -name '*.csproj' -print0 | xargs -0 grep -l -i 'Microsoft.NET.Test.Sdk' 2>/dev/null | grep -q .; then
+            TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+            echo "Test project detected — running dotnet test on ${TARGET:-.}"
+            dotnet test "${TARGET:-.}" --configuration Release --verbosity normal
+          else
+            echo "No test project detected — build passed, skipping tests."
+          fi
