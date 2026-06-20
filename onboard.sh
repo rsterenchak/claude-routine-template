@@ -78,10 +78,15 @@ NODE_FILES=(
 #   desktop (.NET WinForms/WPF — Windows Desktop SDK): same as console but the
 #     test workflow runs on windows-latest, because WinForms/WPF don't build on
 #     Linux. Fetched from the template as test-dotnet-windows.yml -> test.yml.
+#   maui (.NET MAUI mobile): builds the Android head on ubuntu (installs the
+#     maui-android workload). No web deploy, no manifest. Fetched from the
+#     template as test-maui.yml -> test.yml. Detected BEFORE desktop, since a
+#     MAUI multi-target usually lists net*-windows too.
 BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
 DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
+MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
 TEMPLATE_FILES=()  # assembled after shape detection
 
 # Files actually created by THIS run (not skipped as already-existing). Used
@@ -161,6 +166,7 @@ fi
 # We short-circuit the Node detection below for both.
 IS_DOTNET="false"
 IS_DESKTOP="false"
+IS_MAUI="false"
 DOTNET_PROJ=""
 if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | grep -q .; then
   IS_DOTNET="true"
@@ -170,6 +176,15 @@ if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path
   anchor="${sln:-$DOTNET_PROJ}"
   WORKING_DIR="$(dirname "${anchor#$TARGET/}")"
   [ "$WORKING_DIR" = "$TARGET" ] && WORKING_DIR="."
+  # MAUI signal: <UseMaui>true</UseMaui> or a mobile TFM (-android/-ios/
+  # -maccatalyst). Resolved FIRST in the shape block below, because a MAUI
+  # multi-target usually also lists net*-windows, which would otherwise trip the
+  # desktop signal and misroute it to the windows-latest workflow.
+  if find "$TARGET" -maxdepth 3 -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' -print0 2>/dev/null \
+       | xargs -0 grep -liE '<UseMaui>[[:space:]]*true|<TargetFrameworks?>[^<]*-android|<TargetFrameworks?>[^<]*-ios|<TargetFrameworks?>[^<]*-maccatalyst' 2>/dev/null \
+       | grep -q .; then
+    IS_MAUI="true"
+  fi
   # Desktop signal: WinForms/WPF or a Windows-target TFM. These need the Windows
   # Desktop targeting packs (ship with the SDK only on Windows), so they route
   # to the desktop shape (windows-latest) instead of console (ubuntu). Scan the
@@ -191,7 +206,10 @@ if [ "$IS_DOTNET" = "true" ]; then
   # which test workflow is fetched.
   TEST_CMD="dotnet test"
   BUILD_CMD="dotnet build"
-  if [ "$IS_DESKTOP" = "true" ]; then
+  if [ "$IS_MAUI" = "true" ]; then
+    SHAPE="maui"
+    SHAPE_REASON="C#/.NET MAUI mobile ($(basename "$DOTNET_PROJ")) — Android head builds on ubuntu"
+  elif [ "$IS_DESKTOP" = "true" ]; then
     SHAPE="desktop"
     SHAPE_REASON="C#/.NET desktop GUI ($(basename "$DOTNET_PROJ")) — WinForms/WPF, builds on windows-latest"
   else
@@ -298,7 +316,7 @@ fi
 echo "${c_bold}Detected project shape:${c_rst}"
 echo "  package.json:     ${PKG:-none found}"
 echo "  working dir:      $WORKING_DIR"
-if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   echo "  language:         C# / .NET"
   echo "  manifest variant: none ($SHAPE project — no manifest publishing)"
 else
@@ -314,11 +332,12 @@ echo "  ${c_dim}build-pipeline   -> deploy.yml (build, manifest to dist/, publis
 echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest to repo root)${c_rst}"
 echo "  ${c_dim}console          -> dotnet test workflow (ubuntu), no deploy, no manifest publishing${c_rst}"
 echo "  ${c_dim}desktop          -> dotnet test workflow (windows-latest, WinForms/WPF), no deploy${c_rst}"
+echo "  ${c_dim}maui             -> dotnet MAUI Android build (ubuntu, workload install), no deploy${c_rst}"
 echo
-if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
-  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop' to override] " shape_confirm
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
+  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui' to override] " shape_confirm
 else
-  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop' to override] " shape_confirm
+  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui' to override] " shape_confirm
 fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
@@ -326,15 +345,17 @@ case "$shape_confirm" in
   served*) SHAPE="served-from-source"; echo "  -> overridden to served-from-source" ;;
   console*|[cC]) SHAPE="console"; echo "  -> overridden to console" ;;
   desktop*|[dD]) SHAPE="desktop"; echo "  -> overridden to desktop" ;;
+  maui*|[mM]) SHAPE="maui"; echo "  -> overridden to maui" ;;
   [nN]|[nN][oO])
-    echo "Which shape? Type 'build', 'served', 'console', or 'desktop':"
+    echo "Which shape? Type 'build', 'served', 'console', 'desktop', or 'maui':"
     read -r shape_pick
     case "$shape_pick" in
       build*) SHAPE="build-pipeline" ;;
       served*) SHAPE="served-from-source" ;;
       console*|[cC]) SHAPE="console" ;;
       desktop*|[dD]) SHAPE="desktop" ;;
-      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, or desktop."; exit 1 ;;
+      maui*|[mM]) SHAPE="maui" ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, desktop, or maui."; exit 1 ;;
     esac
     echo "  -> set to $SHAPE"
     ;;
@@ -412,6 +433,9 @@ case "$SHAPE" in
     ;;
   desktop)
     TEMPLATE_FILES+=( "${DESKTOP_FILES[@]}" )
+    ;;
+  maui)
+    TEMPLATE_FILES+=( "${MAUI_FILES[@]}" )
     ;;
 esac
 
@@ -532,8 +556,8 @@ STACK="${IN_STACK:-$STACK_DEFAULT}"
 SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_VAL="src/"
 TEST_DIR_VAL="tests/"
 DOTNET_VERSION_VAL=""
-if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
-  # .NET defaults (console + desktop share the dotnet command set).
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
+  # .NET defaults (console + desktop + maui share the dotnet command set).
   TEST_CMD_VAL="dotnet test"
   BUILD_CMD_VAL="dotnet build"
   INSTALL_CMD_VAL="dotnet restore"
@@ -573,6 +597,7 @@ case "$SHAPE" in
   served-from-source) PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   console)            : ;;  # console's test.yml is already in the list above
   desktop)            : ;;  # desktop's test.yml is already in the list above
+  maui)               : ;;  # maui's test.yml is already in the list above
 esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
   fpath="$TARGET/$pf"
@@ -655,8 +680,8 @@ if [ "$USE_GH" = "true" ]; then
           echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
         fi
         ;;
-      console|desktop)
-        # No Pages for console/desktop shapes — intentional skip.
+      console|desktop|maui)
+        # No Pages for console/desktop/maui shapes — intentional skip.
         ;;
     esac
 
