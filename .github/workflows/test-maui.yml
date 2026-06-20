@@ -1,0 +1,103 @@
+name: Tests
+
+# ─────────────────────────────────────────────────────────────────
+# MAUI / .NET mobile variant of the test workflow.
+# Used for .NET MAUI projects (<UseMaui>true</UseMaui> or an -android target
+# framework). Builds the ANDROID head only — WGU's mobile course targets
+# Android, and the iOS / Mac Catalyst heads can't build on a Linux runner
+# anyway. No web deploy, no manifest publishing.
+#
+# Runs on ubuntu-latest: GitHub's ubuntu runners ship the Android SDK, and the
+# maui-android workload installs the rest. A MAUI project usually multi-targets
+# (net*-android;net*-ios;net*-windows), so the build is pinned to the Android
+# TFM — the windows/ios heads, which don't build on Linux, are never attempted.
+# (This is also why MAUI must be detected BEFORE the desktop shape: the
+# net*-windows entry in a MAUI multi-target would otherwise look like WinForms/WPF.)
+#
+# The onboard script fetches this as test.yml into the target repo and fills
+# {{WORKING_DIR}} and {{DOTNET_VERSION}}.
+#
+# Behavior: builds the Android head (a compile failure fails CI). Runs
+# `dotnet test` ONLY on discovered test projects — scoped, so the app heads
+# aren't dragged into the test build — so a fresh assignment with no tests yet
+# still passes CI on the Android compile alone.
+#
+# Watch-out on first run: `dotnet workload install` occasionally hits a
+# permissions error on a fresh runner image. If it does, the fix is to run that
+# one step with elevated permissions (see the commented sudo fallback below).
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+  pull_request:
+    paths-ignore:
+      - 'TODO.md'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '{{DOTNET_VERSION}}'
+
+      - name: Install MAUI Android workload
+        run: dotnet workload install maui-android
+        # If this step fails with a permissions error on a future runner image,
+        # swap the line above for: sudo dotnet workload install maui-android
+
+      - name: Build (Android head)
+        working-directory: {{WORKING_DIR}}
+        shell: bash
+        run: |
+          # Find the MAUI app project (UseMaui or an -android TFM), then read the
+          # exact Android target-framework token so net8 vs net9 isn't hard-coded.
+          PROJ=$(find . -name '*.csproj' -print0 | xargs -0 grep -liE '<UseMaui>[[:space:]]*true|net[0-9]+\.[0-9]+-android' 2>/dev/null | head -1)
+          if [ -z "$PROJ" ]; then
+            echo "No MAUI project found (no <UseMaui> or -android TFM)."
+            echo "If this is a MAUI repo, check the shape; otherwise it was misrouted."
+            exit 1
+          fi
+          TFM=$(grep -hoiE 'net[0-9]+\.[0-9]+-android[0-9.]*' "$PROJ" | head -1)
+          if [ -z "$TFM" ]; then
+            echo "Could not determine the Android target framework from $PROJ."
+            echo "Add an explicit net*-android TFM, or adjust this workflow."
+            exit 1
+          fi
+          echo "Building $PROJ for $TFM"
+          dotnet build "$PROJ" -f "$TFM" -c Release
+
+      - name: Upload APK (best effort)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            **/bin/Release/**/*.apk
+            **/bin/Release/**/*.aab
+          if-no-files-found: ignore
+
+      - name: Test (only if a test project exists)
+        working-directory: {{WORKING_DIR}}
+        shell: bash
+        run: |
+          mapfile -t TEST_PROJS < <(find . -name '*.csproj' -print0 | xargs -0 grep -liE 'Microsoft.NET.Test.Sdk' 2>/dev/null)
+          if [ ${#TEST_PROJS[@]} -eq 0 ]; then
+            echo "No test project detected — Android build passed, skipping tests."
+          else
+            for tp in "${TEST_PROJS[@]}"; do
+              echo "Running dotnet test on $tp"
+              dotnet test "$tp" -c Release --verbosity normal
+            done
+          fi
