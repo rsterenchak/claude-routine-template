@@ -53,7 +53,7 @@ RAW_BASE="https://raw.githubusercontent.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}/$
 # Note: both manifest variants are fetched; the script keeps the right one
 # based on detection and deletes the other.
 #
-# Files truly universal to EVERY shape (Node web apps and .NET console apps):
+# Files truly universal to EVERY shape (Node web apps and .NET projects):
 UNIVERSAL_FILES=(
   "CLAUDE.md"
   "TODO.md"
@@ -62,7 +62,7 @@ UNIVERSAL_FILES=(
   ".github/workflows/claude-run.yml"
 )
 # Node-shape files (build-pipeline + served-from-source): the npm test workflow
-# and the manifest generators. Not used by the console shape.
+# and the manifest generators. Not used by the .NET shapes.
 NODE_FILES=(
   ".github/workflows/test.yml"
   "scripts/gen-src-manifest.js"
@@ -71,13 +71,17 @@ NODE_FILES=(
 # Shape-specific files.
 #   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
 #   served-from-source (served straight from main): manifest.yml
-#   console (.NET console app, no web deploy): a dotnet test workflow, fetched
-#     from the template as test-dotnet.yml and written to the target as test.yml
-#     (the "SRC>DEST" syntax in the fetch loop handles the rename). No manifest
-#     generators, no deploy/manifest workflow.
+#   console (.NET console / cross-platform, no web deploy): a dotnet test
+#     workflow on ubuntu, fetched from the template as test-dotnet.yml and
+#     written to the target as test.yml (the "SRC>DEST" syntax in the fetch
+#     loop handles the rename). No manifest generators, no deploy/manifest.
+#   desktop (.NET WinForms/WPF — Windows Desktop SDK): same as console but the
+#     test workflow runs on windows-latest, because WinForms/WPF don't build on
+#     Linux. Fetched from the template as test-dotnet-windows.yml -> test.yml.
 BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
+DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
 TEMPLATE_FILES=()  # assembled after shape detection
 
 # Files actually created by THIS run (not skipped as already-existing). Used
@@ -149,10 +153,14 @@ fi
 
 # ── .NET / C# detection (runs before Node detection) ──
 # A C# project has a .csproj or .sln, no package.json, and doesn't deploy to the
-# web. If detected, it's the "console" shape: dotnet test/build commands, no
-# manifest publishing, no deploy/manifest workflow — just the routine + a dotnet
-# test workflow. We short-circuit the Node detection below.
+# web. If detected, it's one of two .NET shapes:
+#   console — cross-platform (.NET console / class lib): dotnet test/build on
+#             ubuntu, no manifest, no deploy.
+#   desktop — WinForms/WPF (Windows Desktop SDK): same, but the test workflow
+#             runs on windows-latest because these don't build on Linux.
+# We short-circuit the Node detection below for both.
 IS_DOTNET="false"
+IS_DESKTOP="false"
 DOTNET_PROJ=""
 if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | grep -q .; then
   IS_DOTNET="true"
@@ -162,17 +170,34 @@ if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path
   anchor="${sln:-$DOTNET_PROJ}"
   WORKING_DIR="$(dirname "${anchor#$TARGET/}")"
   [ "$WORKING_DIR" = "$TARGET" ] && WORKING_DIR="."
+  # Desktop signal: WinForms/WPF or a Windows-target TFM. These need the Windows
+  # Desktop targeting packs (ship with the SDK only on Windows), so they route
+  # to the desktop shape (windows-latest) instead of console (ubuntu). Scan the
+  # .csproj files one level deeper than the anchor — the .sln often sits a folder
+  # above the project that actually carries these properties.
+  if find "$TARGET" -maxdepth 3 -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' -print0 2>/dev/null \
+       | xargs -0 grep -liE '<UseWindowsForms>[[:space:]]*true|<UseWPF>[[:space:]]*true|<TargetFrameworks?>[^<]*-windows' 2>/dev/null \
+       | grep -q .; then
+    IS_DESKTOP="true"
+  fi
 fi
 
 IS_ESM="false"
 TEST_CMD="(not detected — fill in manually)"
 BUILD_CMD="(not detected — fill in manually)"
 if [ "$IS_DOTNET" = "true" ]; then
-  # .NET console project — fixed dotnet commands, console shape.
+  # .NET project — fixed dotnet commands. console builds cross-platform on
+  # ubuntu; desktop (WinForms/WPF) needs windows-latest. Shapes differ only in
+  # which test workflow is fetched.
   TEST_CMD="dotnet test"
   BUILD_CMD="dotnet build"
-  SHAPE="console"
-  SHAPE_REASON="C#/.NET project ($(basename "$DOTNET_PROJ")) — no web deploy"
+  if [ "$IS_DESKTOP" = "true" ]; then
+    SHAPE="desktop"
+    SHAPE_REASON="C#/.NET desktop GUI ($(basename "$DOTNET_PROJ")) — WinForms/WPF, builds on windows-latest"
+  else
+    SHAPE="console"
+    SHAPE_REASON="C#/.NET project ($(basename "$DOTNET_PROJ")) — no web deploy"
+  fi
   WD_ABS="$TARGET"; [ "$WORKING_DIR" != "." ] && WD_ABS="$TARGET/$WORKING_DIR"
   # .NET source layout: .cs files usually live alongside the .csproj, sometimes
   # under src/. Check src/ first, else use the working dir itself.
@@ -181,7 +206,7 @@ if [ "$IS_DOTNET" = "true" ]; then
   else
     SRC_PREFIX="$([ "$WORKING_DIR" = "." ] && echo "" || echo "$WORKING_DIR/")"
   fi
-  MANIFEST_VARIANT="(none — console project)"
+  MANIFEST_VARIANT="(none — $SHAPE project)"
 elif [ -n "$PKG" ] && [ -f "$PKG" ]; then
   # ESM detection: "type": "module" in package.json
   if grep -Eq '"type"[[:space:]]*:[[:space:]]*"module"' "$PKG"; then
@@ -273,9 +298,9 @@ fi
 echo "${c_bold}Detected project shape:${c_rst}"
 echo "  package.json:     ${PKG:-none found}"
 echo "  working dir:      $WORKING_DIR"
-if [ "$SHAPE" = "console" ]; then
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
   echo "  language:         C# / .NET"
-  echo "  manifest variant: none (console project — no manifest publishing)"
+  echo "  manifest variant: none ($SHAPE project — no manifest publishing)"
 else
   echo "  module type:      $([ "$IS_ESM" = "true" ] && echo "ESM (\"type\":\"module\")" || echo "CommonJS")"
   echo "  manifest variant: $MANIFEST_VARIANT  (the other will be removed)"
@@ -287,26 +312,29 @@ echo "  ${c_bold}deploy shape:     $SHAPE${c_rst}  ($SHAPE_REASON)"
 echo
 echo "  ${c_dim}build-pipeline   -> deploy.yml (build, manifest to dist/, publish to gh-pages)${c_rst}"
 echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest to repo root)${c_rst}"
-echo "  ${c_dim}console          -> dotnet test workflow, no deploy, no manifest publishing${c_rst}"
+echo "  ${c_dim}console          -> dotnet test workflow (ubuntu), no deploy, no manifest publishing${c_rst}"
+echo "  ${c_dim}desktop          -> dotnet test workflow (windows-latest, WinForms/WPF), no deploy${c_rst}"
 echo
-if [ "$SHAPE" = "console" ]; then
-  read -r -p "Detected a C#/.NET console project. Correct? [Y/n, or 'build'/'served' to override] " shape_confirm
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
+  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop' to override] " shape_confirm
 else
-  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console' to override] " shape_confirm
+  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop' to override] " shape_confirm
 fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
   build*) SHAPE="build-pipeline"; echo "  -> overridden to build-pipeline" ;;
   served*) SHAPE="served-from-source"; echo "  -> overridden to served-from-source" ;;
   console*|[cC]) SHAPE="console"; echo "  -> overridden to console" ;;
+  desktop*|[dD]) SHAPE="desktop"; echo "  -> overridden to desktop" ;;
   [nN]|[nN][oO])
-    echo "Which shape? Type 'build', 'served', or 'console':"
+    echo "Which shape? Type 'build', 'served', 'console', or 'desktop':"
     read -r shape_pick
     case "$shape_pick" in
       build*) SHAPE="build-pipeline" ;;
       served*) SHAPE="served-from-source" ;;
       console*|[cC]) SHAPE="console" ;;
-      *) echo "Unrecognized. Aborting — re-run and pick build, served, or console."; exit 1 ;;
+      desktop*|[dD]) SHAPE="desktop" ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, or desktop."; exit 1 ;;
     esac
     echo "  -> set to $SHAPE"
     ;;
@@ -369,8 +397,8 @@ fi
 
 # Assemble the active file list. Universal files for every shape; Node shapes
 # also get the npm test workflow + manifest generators; then the shape-specific
-# workflow. The console shape skips NODE_FILES entirely (no npm test, no
-# manifest generators) and brings its own dotnet test workflow.
+# workflow. The .NET shapes (console/desktop) skip NODE_FILES entirely (no npm
+# test, no manifest generators) and bring their own dotnet test workflow.
 TEMPLATE_FILES=( "${UNIVERSAL_FILES[@]}" )
 case "$SHAPE" in
   build-pipeline)
@@ -381,6 +409,9 @@ case "$SHAPE" in
     ;;
   console)
     TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" )
+    ;;
+  desktop)
+    TEMPLATE_FILES+=( "${DESKTOP_FILES[@]}" )
     ;;
 esac
 
@@ -501,13 +532,13 @@ STACK="${IN_STACK:-$STACK_DEFAULT}"
 SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_VAL="src/"
 TEST_DIR_VAL="tests/"
 DOTNET_VERSION_VAL=""
-if [ "$SHAPE" = "console" ]; then
-  # .NET console defaults.
+if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ]; then
+  # .NET defaults (console + desktop share the dotnet command set).
   TEST_CMD_VAL="dotnet test"
   BUILD_CMD_VAL="dotnet build"
   INSTALL_CMD_VAL="dotnet restore"
   BUILD_DIR_VAL="bin/"
-  DEPLOY_TARGET_VAL="none (console app)"
+  DEPLOY_TARGET_VAL="none ($SHAPE app)"
   read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
   DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
 else
@@ -541,6 +572,7 @@ case "$SHAPE" in
   build-pipeline)     PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" ) ;;
   served-from-source) PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   console)            : ;;  # console's test.yml is already in the list above
+  desktop)            : ;;  # desktop's test.yml is already in the list above
 esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
   fpath="$TARGET/$pf"
@@ -597,7 +629,7 @@ if [ "$USE_GH" = "true" ]; then
       echo "  ${c_red}FAILED${c_rst} workflow permissions (set manually in Settings -> Actions -> General -> Workflow permissions)"
     fi
 
-    # 2. Pages source — web shapes only. Console skips entirely.
+    # 2. Pages source — web shapes only. console/desktop skip entirely.
     case "$SHAPE" in
       build-pipeline)
         # Try-and-catch: if gh-pages branch doesn't exist yet (first onboarding,
@@ -623,8 +655,8 @@ if [ "$USE_GH" = "true" ]; then
           echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
         fi
         ;;
-      console)
-        # No Pages for console shape — intentional skip.
+      console|desktop)
+        # No Pages for console/desktop shapes — intentional skip.
         ;;
     esac
 
