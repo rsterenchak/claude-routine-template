@@ -304,6 +304,15 @@ if [ "$IS_DOTNET" != "true" ]; then
   elif [ "$HAS_BUILD" = "true" ]; then
     SHAPE="build-pipeline"
     SHAPE_REASON="has a build script (no bundler config detected — verify)"
+  elif [ -z "$PKG" ] && [ "$HAS_ROOT_HTML" != "true" ] && [ ! -d "$WD_ABS/src" ]; then
+    # Nothing buildable or servable and not .NET: SQL scripts, docs, notes,
+    # study repos. The routine + TODO.md still work as a backlog/storage tracker,
+    # but there's nothing to build, test, or deploy — so no test/deploy/manifest.
+    SHAPE="repo-only"
+    SHAPE_REASON="no package.json, no web entry point, no .NET — backlog/storage repo (no build/test/deploy)"
+    TEST_CMD="none (repo-only)"
+    BUILD_CMD="none (repo-only)"
+    MANIFEST_VARIANT="(none — repo-only)"
   else
     SHAPE="served-from-source"
     SHAPE_REASON="no build step detected (assuming served-from-source — verify)"
@@ -319,6 +328,9 @@ echo "  working dir:      $WORKING_DIR"
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   echo "  language:         C# / .NET"
   echo "  manifest variant: none ($SHAPE project — no manifest publishing)"
+elif [ "$SHAPE" = "repo-only" ]; then
+  echo "  type:             backlog/storage repo (no build, test, or deploy)"
+  echo "  manifest variant: none (repo-only — no manifest publishing)"
 else
   echo "  module type:      $([ "$IS_ESM" = "true" ] && echo "ESM (\"type\":\"module\")" || echo "CommonJS")"
   echo "  manifest variant: $MANIFEST_VARIANT  (the other will be removed)"
@@ -333,11 +345,12 @@ echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest
 echo "  ${c_dim}console          -> dotnet test workflow (ubuntu), no deploy, no manifest publishing${c_rst}"
 echo "  ${c_dim}desktop          -> dotnet test workflow (windows-latest, WinForms/WPF), no deploy${c_rst}"
 echo "  ${c_dim}maui             -> dotnet MAUI Android build (ubuntu, workload install), no deploy${c_rst}"
+echo "  ${c_dim}repo-only        -> backlog/storage repo: routine + TODO only, no test/deploy/manifest${c_rst}"
 echo
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
-  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui' to override] " shape_confirm
+  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui'/'repo' to override] " shape_confirm
 else
-  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui' to override] " shape_confirm
+  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui'/'repo' to override] " shape_confirm
 fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
@@ -346,8 +359,9 @@ case "$shape_confirm" in
   console*|[cC]) SHAPE="console"; echo "  -> overridden to console" ;;
   desktop*|[dD]) SHAPE="desktop"; echo "  -> overridden to desktop" ;;
   maui*|[mM]) SHAPE="maui"; echo "  -> overridden to maui" ;;
+  repo*|none*|[rR]) SHAPE="repo-only"; echo "  -> overridden to repo-only" ;;
   [nN]|[nN][oO])
-    echo "Which shape? Type 'build', 'served', 'console', 'desktop', or 'maui':"
+    echo "Which shape? Type 'build', 'served', 'console', 'desktop', 'maui', or 'repo':"
     read -r shape_pick
     case "$shape_pick" in
       build*) SHAPE="build-pipeline" ;;
@@ -355,7 +369,8 @@ case "$shape_confirm" in
       console*|[cC]) SHAPE="console" ;;
       desktop*|[dD]) SHAPE="desktop" ;;
       maui*|[mM]) SHAPE="maui" ;;
-      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, desktop, or maui."; exit 1 ;;
+      repo*|none*|[rR]) SHAPE="repo-only" ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, desktop, maui, or repo."; exit 1 ;;
     esac
     echo "  -> set to $SHAPE"
     ;;
@@ -436,6 +451,9 @@ case "$SHAPE" in
     ;;
   maui)
     TEMPLATE_FILES+=( "${MAUI_FILES[@]}" )
+    ;;
+  repo-only)
+    : # universal files only — no test/deploy/manifest workflow
     ;;
 esac
 
@@ -565,6 +583,15 @@ if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]
   DEPLOY_TARGET_VAL="none ($SHAPE app)"
   read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
   DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
+elif [ "$SHAPE" = "repo-only" ]; then
+  # Backlog/storage repo — no build pipeline. These read as "none" in the filled
+  # CLAUDE.md/routine.md, which use the values descriptively (not as forced runs).
+  TEST_CMD_VAL="none"
+  BUILD_CMD_VAL="none"
+  INSTALL_CMD_VAL="none"
+  BUILD_DIR_VAL="n/a"
+  DEPLOY_TARGET_VAL="none (backlog/storage repo)"
+  SRC_DIR_VAL=""
 else
   TEST_CMD_VAL="$TEST_CMD"; [ "${TEST_CMD_VAL#\(}" != "$TEST_CMD_VAL" ] && TEST_CMD_VAL="npm test"
   BUILD_CMD_VAL="$BUILD_CMD"; [ "${BUILD_CMD_VAL#\(}" != "$BUILD_CMD_VAL" ] && BUILD_CMD_VAL="npm run build"
@@ -598,6 +625,7 @@ case "$SHAPE" in
   console)            : ;;  # console's test.yml is already in the list above
   desktop)            : ;;  # desktop's test.yml is already in the list above
   maui)               : ;;  # maui's test.yml is already in the list above
+  repo-only)          : ;;  # repo-only has no shape-specific workflow
 esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
   fpath="$TARGET/$pf"
@@ -680,8 +708,8 @@ if [ "$USE_GH" = "true" ]; then
           echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
         fi
         ;;
-      console|desktop|maui)
-        # No Pages for console/desktop/maui shapes — intentional skip.
+      console|desktop|maui|repo-only)
+        # No Pages for console/desktop/maui/repo-only shapes — intentional skip.
         ;;
     esac
 
