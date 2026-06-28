@@ -190,8 +190,8 @@ const CS_MAX_MEMBERS_PER_TYPE = 60;
 const CS_MAX_TYPES_TOTAL = 600;
 
 const CS_TYPE_DECL_RE = /\b(class|interface|struct|enum|record)[ \t]+([A-Za-z_]\w*)/gd;
-const CS_METHOD_RE = /(?:^|[\n;{}])[ \t]*(?:(?:\[[^\]\n]*\][ \t]*)*)(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|async|extern|unsafe|partial|new)[ \t]+)*([A-Za-z_][\w.]*(?:<[^;{}()\n]*>)?(?:\[[ \t]*\])?\??)[ \t]+([A-Za-z_]\w*)(?:<[^>(){};\n]*>)?[ \t]*\(([^()]*)\)[ \t]*(?:where[^={;\n]+)?[ \t]*(?:=>|\{|;)/gd;
-const CS_PROP_RE = /(?:^|[\n;{}])[ \t]*(?:(?:\[[^\]\n]*\][ \t]*)*)(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|readonly|new|required)[ \t]+)*([A-Za-z_][\w.]*(?:<[^;{}()\n]*>)?(?:\[[ \t]*\])?\??)[ \t]+([A-Za-z_]\w*)[ \t]*(?:\{(?=[^}]*\b(?:get|set|init)\b)|=>)/gd;
+const CS_METHOD_RE = /(?:^|[\n;{}])[ \t]*(?:(?:\[[^\]\n]*\][ \t]*)*)(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|async|extern|unsafe|partial|new)[ \t]+)*([A-Za-z_][\w.]*(?:<[^;{}()\n]*>)?(?:\[[ \t]*\])?\??)[ \t]+([A-Za-z_]\w*)(?:<[^>(){};\n]*>)?[ \t]*\(([^()]*)\)[ \t\r\n]*(?:where[^={;\n]+)?[ \t\r\n]*(?:=>|\{|;)/gd;
+const CS_PROP_RE = /(?:^|[\n;{}])[ \t]*(?:(?:\[[^\]\n]*\][ \t]*)*)(?:(?:public|private|protected|internal|static|virtual|override|abstract|sealed|readonly|new|required)[ \t]+)*([A-Za-z_][\w.]*(?:<[^;{}()\n]*>)?(?:\[[ \t]*\])?\??)[ \t]+([A-Za-z_]\w*)[ \t\r\n]*(?:\{(?=[^}]*\b(?:get|set|init)\b)|=>)/gd;
 
 // Blank comments + string/char literals to spaces, preserving newlines and
 // total length so match offsets still map to original line numbers.
@@ -301,7 +301,7 @@ function scanCsharpTypes(rawSrc, relPath) {
   const names = decls.map(function (d) { return d.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); });
   const uniq = names.filter(function (v, k) { return names.indexOf(v) === k; });
   if (uniq.length) {
-    const ctorRe = new RegExp('(?:^|[\\n;{}])[ \\t]*(?:(?:public|private|protected|internal|static)[ \\t]+)*\\b(' + uniq.join('|') + ')[ \\t]*\\(([^()]*)\\)[ \\t]*(?::[^={;\\n]+)?[ \\t]*\\{', 'gd');
+    const ctorRe = new RegExp('(?:^|[\\n;{}])[ \\t]*(?:(?:public|private|protected|internal|static)[ \\t]+)*\\b(' + uniq.join('|') + ')[ \\t]*\\(([^()]*)\\)[ \\t\\r\\n]*(?::[^={;\\n]+)?[ \\t\\r\\n]*\\{', 'gd');
     while ((m = ctorRe.exec(src)) !== null) {
       addMember(m.indices[1][0], 'method', m[1], m[1] + '(' + csClean(m[2]) + ')');
     }
