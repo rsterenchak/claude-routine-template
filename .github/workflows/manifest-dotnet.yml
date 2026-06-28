@@ -1,0 +1,70 @@
+name: Update source manifest (.NET)
+
+# ─────────────────────────────────────────────────────────────────
+# .NET shapes (console / desktop / MAUI). There's no app build and no web
+# bundle — this workflow exists only to publish the SOURCE MANIFEST that the
+# dashboard's Structure tab fetches, so a C# repo gets a Code lens (file tree
+# + Explain + View on GitHub) just like the web repos do.
+#
+# It regenerates src-manifest.json at the repo ROOT (where Pages serves it,
+# "Deploy from a branch -> main -> root") and commits it back to main, but
+# ONLY when the .cs file LIST changed: deterministic mode (no volatile
+# timestamp/sha) means an unchanged list produces a byte-identical manifest
+# and no commit. The generator is the same gen-src-manifest the web shapes
+# use, run in csharp mode — a recursive .cs walk (bin/obj/generated skipped)
+# that emits repo-root-relative paths, so the Code lens tree nests by folder
+# and the UI lens correctly reads "no UI surface".
+#
+# Node-only: the scanner is pure Node with no dependencies, so this just does
+# setup-node + run the script — entirely independent of the repo's dotnet
+# build/test workflow.
+#
+# MANIFEST_SRC_ROOT scopes the walk to this project's folder. The onboard
+# script fills it, and it equals this repo's srcPrefix in the worker's
+# ALLOWED_TARGETS — which is what makes emitted paths resolve for chat
+# attachment. Leave it blank for a project that sits at the repo root.
+#
+# Loop prevention: paths-ignore skips src-manifest.json (so the manifest
+# commit doesn't re-trigger this workflow) and the commit carries [skip ci].
+# ─────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'TODO.md'
+      - 'src-manifest.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate C# source manifest (repo root, deterministic)
+        run: node scripts/gen-src-manifest.js
+        env:
+          MANIFEST_LANG: 'csharp'
+          MANIFEST_SRC_ROOT: '{{MANIFEST_SRC_ROOT}}'
+          MANIFEST_OUT_DIR: '.'
+          MANIFEST_DETERMINISTIC: 'true'
+
+      - name: Commit manifest if the file list changed
+        run: |
+          if [[ -n "$(git status --porcelain src-manifest.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add src-manifest.json
+            git commit -m "Update source manifest [skip ci]"
+            git push
+          else
+            echo "Manifest unchanged — nothing to commit."
+          fi
