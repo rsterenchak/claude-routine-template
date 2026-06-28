@@ -87,6 +87,16 @@ SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
 DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
 MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
+# .NET manifest publishing — the (CommonJS) scanner + a publish workflow that
+# runs it in csharp mode and serves src-manifest.json from main root (like
+# served-from-source), so the Structure tab can fetch a C# repo's file tree.
+# Added to all three .NET shapes; repo-only stays manifest-less. The template
+# stores the workflow as manifest-dotnet.yml and onboard writes it into the
+# target as plain manifest.yml (the SRC>DEST rename, same as test-dotnet.yml).
+DOTNET_MANIFEST_FILES=(
+  "scripts/gen-src-manifest.js"
+  ".github/workflows/manifest-dotnet.yml>.github/workflows/manifest.yml"
+)
 TEMPLATE_FILES=()  # assembled after shape detection
 
 # Files actually created by THIS run (not skipped as already-existing). Used
@@ -327,7 +337,7 @@ echo "  package.json:     ${PKG:-none found}"
 echo "  working dir:      $WORKING_DIR"
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   echo "  language:         C# / .NET"
-  echo "  manifest variant: none ($SHAPE project — no manifest publishing)"
+  echo "  manifest variant: gen-src-manifest.js (csharp mode — published to Pages)"
 elif [ "$SHAPE" = "repo-only" ]; then
   echo "  type:             backlog/storage repo (no build, test, or deploy)"
   echo "  manifest variant: none (repo-only — no manifest publishing)"
@@ -342,9 +352,9 @@ echo "  ${c_bold}deploy shape:     $SHAPE${c_rst}  ($SHAPE_REASON)"
 echo
 echo "  ${c_dim}build-pipeline   -> deploy.yml (build, manifest to dist/, publish to gh-pages)${c_rst}"
 echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest to repo root)${c_rst}"
-echo "  ${c_dim}console          -> dotnet test workflow (ubuntu), no deploy, no manifest publishing${c_rst}"
-echo "  ${c_dim}desktop          -> dotnet test workflow (windows-latest, WinForms/WPF), no deploy${c_rst}"
-echo "  ${c_dim}maui             -> dotnet MAUI Android build (ubuntu, workload install), no deploy${c_rst}"
+echo "  ${c_dim}console          -> dotnet test (ubuntu) + publish src-manifest.json to Pages${c_rst}"
+echo "  ${c_dim}desktop          -> dotnet test (windows-latest, WinForms/WPF) + manifest to Pages${c_rst}"
+echo "  ${c_dim}maui             -> dotnet MAUI Android build (ubuntu) + manifest to Pages${c_rst}"
 echo "  ${c_dim}repo-only        -> backlog/storage repo: routine + TODO only, no test/deploy/manifest${c_rst}"
 echo
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
@@ -444,13 +454,13 @@ case "$SHAPE" in
     TEMPLATE_FILES+=( "${NODE_FILES[@]}" "${SERVED_FROM_SOURCE_FILES[@]}" )
     ;;
   console)
-    TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" )
+    TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
     ;;
   desktop)
-    TEMPLATE_FILES+=( "${DESKTOP_FILES[@]}" )
+    TEMPLATE_FILES+=( "${DESKTOP_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
     ;;
   maui)
-    TEMPLATE_FILES+=( "${MAUI_FILES[@]}" )
+    TEMPLATE_FILES+=( "${MAUI_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
     ;;
   repo-only)
     : # universal files only — no test/deploy/manifest workflow
@@ -574,13 +584,18 @@ STACK="${IN_STACK:-$STACK_DEFAULT}"
 SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_VAL="src/"
 TEST_DIR_VAL="tests/"
 DOTNET_VERSION_VAL=""
+MANIFEST_SRC_ROOT_VAL=""
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   # .NET defaults (console + desktop + maui share the dotnet command set).
   TEST_CMD_VAL="dotnet test"
   BUILD_CMD_VAL="dotnet build"
   INSTALL_CMD_VAL="dotnet restore"
   BUILD_DIR_VAL="bin/"
-  DEPLOY_TARGET_VAL="none ($SHAPE app)"
+  DEPLOY_TARGET_VAL="GitHub Pages (source manifest only — no app deploy)"
+  # Scope the csharp manifest walk to this project's folder. Equals the repo's
+  # srcPrefix sans trailing slash, so emitted paths start with that prefix —
+  # which is what makes the worker resolve them for chat attachment.
+  MANIFEST_SRC_ROOT_VAL="${SRC_PREFIX%/}"
   read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
   DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
 elif [ "$SHAPE" = "repo-only" ]; then
@@ -622,9 +637,9 @@ PLACEHOLDER_FILES=(
 case "$SHAPE" in
   build-pipeline)     PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" ) ;;
   served-from-source) PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
-  console)            : ;;  # console's test.yml is already in the list above
-  desktop)            : ;;  # desktop's test.yml is already in the list above
-  maui)               : ;;  # maui's test.yml is already in the list above
+  console)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
+  desktop)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
+  maui)               PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   repo-only)          : ;;  # repo-only has no shape-specific workflow
 esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
@@ -643,6 +658,7 @@ for pf in "${PLACEHOLDER_FILES[@]}"; do
   subst "$fpath" "DEPLOY_TARGET" "$DEPLOY_TARGET_VAL"
   subst "$fpath" "MANIFEST_VARIANT" "$MANIFEST_VARIANT"
   [ -n "$DOTNET_VERSION_VAL" ] && subst "$fpath" "DOTNET_VERSION" "$DOTNET_VERSION_VAL"
+  subst "$fpath" "MANIFEST_SRC_ROOT" "$MANIFEST_SRC_ROOT_VAL"
 done
 echo "  ${c_grn}filled${c_rst} placeholders in $(printf '%s, ' "${PLACEHOLDER_FILES[@]}" | sed 's/, $//')"
 echo "  ${c_yel}note${c_rst}  the \"Key files\" section of CLAUDE.md and the freeform sections of"
@@ -708,8 +724,19 @@ if [ "$USE_GH" = "true" ]; then
           echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
         fi
         ;;
-      console|desktop|maui|repo-only)
-        # No Pages for console/desktop/maui/repo-only shapes — intentional skip.
+      console|desktop|maui)
+        # .NET shapes publish src-manifest.json to Pages (served from main
+        # root, like served-from-source) so the Structure tab can fetch it.
+        if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
+             -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
+          echo "  ${c_grn}set${c_rst}    Pages source: main branch, root (serves src-manifest.json)"
+          GH_PAGES_DONE=true
+        else
+          echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> main / root)"
+        fi
+        ;;
+      repo-only)
+        # No Pages for repo-only — no manifest to serve.
         ;;
     esac
 
