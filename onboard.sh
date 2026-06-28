@@ -103,6 +103,7 @@ TEMPLATE_FILES=()  # assembled after shape detection
 # later for selective `git add` so the auto-commit-push step never sweeps up
 # files the script didn't author.
 files_created=()
+WRITE_FILES=true   # set by the create-prompt below; may flip false to skip writes
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -145,6 +146,31 @@ if [ -f "$TARGET/.claude/routine.md" ]; then
     [yY]|[yY][eE][sS]) echo "  -> continuing"; echo ;;
     *) echo "  Aborted. No changes made."; exit 0 ;;
   esac
+
+  # Unpushed-commit guard. A half-finished earlier run can leave scaffold files
+  # committed locally but never pushed (e.g. the push 403'd on cross-repo
+  # Codespace auth). Those files then read as "already exists", so THIS run skips
+  # them AND the commit step stages nothing new — they silently never reach
+  # origin, and re-running keeps looping on the same no-op. Surface any unpushed
+  # commits here so they get pushed instead of re-diagnosed turns later.
+  if git -C "$TARGET" rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
+    ob_ahead="$(git -C "$TARGET" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    if [ "${ob_ahead:-0}" -gt 0 ]; then
+      ob_branch="$(git -C "$TARGET" symbolic-ref --short HEAD 2>/dev/null || echo main)"
+      echo "  ${c_yel}heads-up:${c_rst} ${c_bold}${ob_ahead}${c_rst} local commit(s) on ${c_bold}${ob_branch}${c_rst} are NOT on origin yet:"
+      git -C "$TARGET" log --oneline '@{u}..HEAD' 2>/dev/null | sed 's/^/        /'
+      echo "  An earlier run probably committed scaffold files but failed to push. Since"
+      echo "  they exist locally now, this run will SKIP them and commit nothing new — so"
+      echo "  they never reach origin. Push them first:"
+      echo "      ${c_dim}git -C \"$TARGET\" push origin ${ob_branch}${c_rst}"
+      echo "      ${c_dim}(403? unset GITHUB_TOKEN && gh auth setup-git, then retry the push)${c_rst}"
+      read -r -p "  Stop here so you can push first? [Y/n] " ob_push_first
+      case "$ob_push_first" in
+        [nN]|[nN][oO]) echo "  -> continuing anyway"; echo ;;
+        *) echo "  Stopped. Push the commits above, then re-run if you still need files."; exit 0 ;;
+      esac
+    fi
+  fi
 fi
 
 # ─────────────────────────────────────────────────────────────────
@@ -483,8 +509,10 @@ done
 echo
 read -r -p "Proceed with creating the missing files above? [y/N] " confirm
 case "$confirm" in
-  [yY]|[yY][eE][sS]) ;;
-  *) echo "Aborted. Nothing written."; exit 0 ;;
+  [yY]|[yY][eE][sS]) WRITE_FILES=true ;;
+  *) WRITE_FILES=false
+     echo "  No new files will be written. Repo settings below (Pages, workflow"
+     echo "  permissions) still apply — they're idempotent and safe to re-run." ;;
 esac
 echo
 
@@ -492,6 +520,7 @@ echo
 # 4. Fetch + write (skip-existing)
 # ─────────────────────────────────────────────────────────────────
 created=0; skipped=0; failed=0
+if [ "$WRITE_FILES" = "true" ]; then
 for f in "${TEMPLATE_FILES[@]}"; do
   # Entries may be "SRC>DEST": fetch SRC from the template, write as DEST.
   if [ "$f" != "${f%>*}" ]; then
@@ -522,6 +551,7 @@ done
 echo
 echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
 echo
+fi   # end "$WRITE_FILES" guard around the fetch/write loop
 
 # ─────────────────────────────────────────────────────────────────
 # 4a. CLAUDE.md customization — strip ASSIGNMENT CONTEXT if personal
