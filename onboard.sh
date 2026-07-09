@@ -59,7 +59,9 @@ UNIVERSAL_FILES=(
   "TODO.md"
   ".claude/routine-base.md"
   ".claude/routine.md"
+  ".claude/triage.md"
   ".github/workflows/claude-run.yml"
+  ".github/workflows/claude-triage.yml"
 )
 # Node-shape files (build-pipeline + served-from-source): the npm test workflow
 # and the manifest generators. Not used by the .NET shapes.
@@ -660,6 +662,7 @@ subst() { # $1=file  $2=key  $3=value
 PLACEHOLDER_FILES=(
   "CLAUDE.md"
   ".claude/routine.md"
+  ".claude/triage.md"
   ".github/workflows/test.yml"
 )
 # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
@@ -707,6 +710,7 @@ GH_WORKFLOW_DONE=false
 GH_PAGES_DONE=false
 GH_PAGES_DEFERRED=false   # build-pipeline: Pages enabling fails until gh-pages exists
 GH_SECRET_DONE=false
+GH_SUPABASE_DONE=false
 if [ "$USE_GH" = "true" ]; then
   REPO_FOR_GH="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "")"
   if [ -z "$REPO_FOR_GH" ] || [ "$REPO_FOR_GH" = "<owner>/<repo>" ]; then
@@ -793,6 +797,41 @@ if [ "$USE_GH" = "true" ]; then
         ;;
       *)
         echo "  ${c_dim}-> will need to add the secret manually (see step below)${c_rst}"
+        ;;
+    esac
+
+    # 4. Supabase secrets — required by claude-triage.yml (reading flagged rows +
+    # writing verdicts back). Same two values across ALL your repos (one Supabase
+    # project), so this is a paste of the same URL + service_role key each time.
+    # claude-run.yml doesn't use them, so they're new here. The service_role key
+    # is sensitive (read -s hides it); SUPABASE_URL is the bare public project URL
+    # and isn't. Use the LEGACY service_role JWT (the routine's curls send it on
+    # the Authorization: Bearer header, which the new sb_secret_... keys reject).
+    echo
+    read -r -p "  Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets now? [y/N] " supa_confirm
+    case "$supa_confirm" in
+      [yY]|[yY][eE][sS])
+        read -r -p "    SUPABASE_URL (https://<ref>.supabase.co, no /rest/v1): " supa_url
+        echo -n "    SUPABASE_SERVICE_ROLE_KEY (input hidden, press Enter when done): "
+        read -rs supa_key
+        echo
+        if [ -n "$supa_url" ] && [ -n "$supa_key" ]; then
+          supa_ok=true
+          printf '%s' "$supa_url" | gh secret set SUPABASE_URL --repo "$REPO_FOR_GH" >/dev/null 2>&1 || supa_ok=false
+          printf '%s' "$supa_key" | gh secret set SUPABASE_SERVICE_ROLE_KEY --repo "$REPO_FOR_GH" >/dev/null 2>&1 || supa_ok=false
+          if [ "$supa_ok" = "true" ]; then
+            echo "  ${c_grn}set${c_rst}    SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets"
+            GH_SUPABASE_DONE=true
+          else
+            echo "  ${c_red}FAILED${c_rst} couldn't set Supabase secrets (add manually in Settings -> Secrets and variables -> Actions)"
+          fi
+          unset supa_key
+        else
+          echo "  ${c_yel}skip${c_rst}   empty value, skipped"
+        fi
+        ;;
+      *)
+        echo "  ${c_dim}-> will need to add the Supabase secrets manually (see step below)${c_rst}"
         ;;
     esac
     echo
@@ -997,6 +1036,18 @@ if [ "$GH_SECRET_DONE" = "true" ]; then
 else
   echo "  3. Add CLAUDE_CODE_OAUTH_TOKEN secret to this repo:"
   echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+  echo
+fi
+
+# Step 3b: Supabase secrets — needed by claude-triage.yml. Conditionally shown
+# as done if gh auto-config set them above.
+if [ "${GH_SUPABASE_DONE:-false}" = "true" ]; then
+  echo "  3b. ${c_grn}[DONE via gh CLI ✓]${c_rst} SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets already set."
+  echo
+else
+  echo "  3b. Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets to this repo (needed for triage):"
+  echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+  echo "       SUPABASE_URL = https://<ref>.supabase.co (no /rest/v1); key = the 'secret' Legacy API key"
   echo
 fi
 
