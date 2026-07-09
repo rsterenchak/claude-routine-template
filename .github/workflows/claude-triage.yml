@@ -1,0 +1,83 @@
+name: Claude triage
+
+# correlation_id is echoed into run-name so the app/Worker can find this run by
+# name (workflow_dispatch returns no run id — same trick as claude-run.yml).
+# project_id scopes the sweep to one project's flagged tasks: the agent is
+# per-project for now.
+run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: project id whose triaging tasks to sweep
+        type: string
+        required: true
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+  # Optional self-sweep — uncomment to have the agent wake on a schedule and
+  # process any triaging rows with no explicit dispatch. Min interval 5 min;
+  # GitHub delays/skips scheduled runs under load and disables them after 60
+  # days of repo inactivity, so treat this as a backstop, not the primary path.
+  # NOTE: on a schedule there is no project_id input — the routine would need to
+  # sweep all triaging rows instead. Left off until the per-project dispatch
+  # path is wired.
+  # schedule:
+  #   - cron: "*/15 * * * *"
+
+permissions:
+  contents: read      # triage only READS source — it never opens PRs or writes the repo
+  id-token: write     # required: the action authenticates via OIDC
+
+concurrency:
+  # one triage sweep at a time; a second dispatch queues rather than overlapping
+  group: claude-triage
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        # shallow is enough — triage reads current source, no git history needed
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # Supabase REST access for reading flagged rows + writing verdicts back.
+          # Service role bypasses RLS (trusted backend job, no user session); the
+          # routine scopes every query by project_id itself. Add both as repo
+          # secrets alongside CLAUDE_CODE_OAUTH_TOKEN.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROJECT_ID: ${{ inputs.project_id }}
+        with:
+          # Subscription auth (Pro/Max) — the SAME plan-billed path as
+          # claude-run.yml, NOT anthropic_api_key. This is what puts triage on
+          # plan usage rather than API.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Sonnet for the fast-path triage sweep (lighter on plan quota than
+          # Opus). Root-cause escalation to Opus is a routine-level decision, not
+          # a workflow one — see .claude/triage.md. --dangerously-skip-permissions:
+          # no human to approve the curl calls the routine makes; safe here — the
+          # runner is ephemeral and contents:read means it cannot push to the repo
+          # even if it tried. Triage only needs Read/Grep/Glob/Bash, so once its
+          # behavior is confirmed this can tighten to
+          # --allowedTools "Read,Grep,Glob,Bash".
+          claude_args: "--max-turns 80 --model claude-sonnet-5 --dangerously-skip-permissions"
+          # Temporary: surface the agent's full output while verifying the sweep
+          # end-to-end (also how the Worker's run_result reads the closing summary).
+          show_full_output: true
+          prompt: |
+            You are running the autonomous-agent TRIAGE sweep for this repository.
+            Project id to sweep: ${{ inputs.project_id }}
+
+            Read `.claude/triage.md` from the repository and execute it exactly as
+            written, for the project id above. It defines how to read the flagged
+            tasks from Supabase, classify each against the real source in this
+            checkout, and write the verdict back to Supabase. Complete the whole
+            sweep, then exit with the one-paragraph summary the routine specifies.
