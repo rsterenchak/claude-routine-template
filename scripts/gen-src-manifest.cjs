@@ -17,7 +17,10 @@
 //                          their members (lens:"types"); "sql" walks the repo for
 //                          .sql files and extracts a best-effort table outline —
 //                          CREATE TABLE blocks and their columns/constraints
-//                          (lens:"sql"). More language modes (docs) slot in here
+//                          (lens:"sql"). "doc" walks the repo for .md/.markdown
+//                          and emits just the file list (lens:"doc") — enough to
+//                          light up the Code lens for a docs/notes repo, no
+//                          second-lens payload. More language modes slot in here
 //                          later.
 //   MANIFEST_OUT_DIR     — where to write src-manifest.json, relative to the
 //                          script's parent. Default "dist"; "." for served-from-
@@ -451,6 +454,43 @@ function buildSqlManifest() {
   return { files: files, srcRoot: '', regions: [], hasDom: false, tables: tables, lens: 'sql' };
 }
 
+// ── doc mode: recursive .md inventory, file list only ──
+// The thinnest lens-publishing mode: walk the repo for Markdown and emit just
+// the file list, so the Structure tab's Code lens (file tree + Explain + View
+// on GitHub) lights up for a docs/notes repo. No content scan — there's no
+// second-lens payload, so the second slot falls back to the empty UI lens
+// ("no UI surface"). lens:'doc' is forward-compatible: a later heading-outline
+// upgrade adds an outline payload + a renderDocLens without changing this
+// value. Paths are repo-root-relative so srcRoot stays empty.
+const DOC_SKIP_DIRS = { '.git': 1, node_modules: 1, dist: 1, '.vs': 1, '.idea': 1 };
+
+function walkDoc(start) {
+  const out = [];
+  (function rec(dir) {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    ents.forEach(function (e) {
+      if (e.isDirectory()) {
+        if (!DOC_SKIP_DIRS[e.name] && e.name.charAt(0) !== '.') rec(path.join(dir, e.name));
+      } else if (/\.(md|markdown|mdx)$/i.test(e.name)) {
+        out.push(path.join(dir, e.name));
+      }
+    });
+  })(start);
+  return out;
+}
+
+function buildDocManifest() {
+  const walkRoot = process.env.MANIFEST_SRC_ROOT ? path.resolve(repoRoot, process.env.MANIFEST_SRC_ROOT) : repoRoot;
+  let absFiles = [];
+  try { absFiles = walkDoc(walkRoot); } catch (e) { absFiles = []; }
+  const rel = function (p) { return path.relative(repoRoot, p).split(path.sep).join('/'); };
+  const files = absFiles.map(rel).sort();
+  // File list only, no DOM, no second-lens payload. The Code lens renders the
+  // tree; the UI lens reads "no UI surface".
+  return { files: files, srcRoot: '', regions: [], hasDom: false, lens: 'doc' };
+}
+
 function finalize(base) {
   const deterministic = process.env.MANIFEST_DETERMINISTIC === 'true';
   return deterministic
@@ -462,11 +502,12 @@ function buildManifest() {
   let base;
   if (LANG === 'csharp' || LANG === 'cs' || LANG === 'dotnet') base = buildCsharpManifest();
   else if (LANG === 'sql' || LANG === 'postgres' || LANG === 'postgresql') base = buildSqlManifest();
+  else if (LANG === 'doc' || LANG === 'docs' || LANG === 'markdown') base = buildDocManifest();
   else base = buildWebManifest();
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql };
+module.exports = { scanRegions: scanRegions, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
 
 if (require.main === module) {
   const manifest = buildManifest();
