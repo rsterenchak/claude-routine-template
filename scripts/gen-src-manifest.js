@@ -14,23 +14,27 @@
 //                          extracts UI regions (lens:"ui"); "csharp" walks the
 //                          repo for .cs files and extracts a best-effort type
 //                          outline — classes/interfaces/structs/enums/records and
-//                          their members (lens:"types"). More language modes
-//                          (sql, docs) slot in here later.
+//                          their members (lens:"types"); "sql" walks the repo for
+//                          .sql files and extracts a best-effort table outline —
+//                          CREATE TABLE blocks and their columns/constraints
+//                          (lens:"sql"). More language modes (docs) slot in here
+//                          later.
 //   MANIFEST_OUT_DIR     — where to write src-manifest.json, relative to the
 //                          script's parent. Default "dist"; "." for served-from-
 //                          source / publish-only repos.
 //   MANIFEST_DETERMINISTIC — "true" omits generatedAt/sha so the manifest only
 //                          changes when files/regions change.
 //   MANIFEST_SRC_ROOT    — web: repo-root-relative path of src/, for GitHub blob
-//                          links (else derived from the git root). csharp: an
-//                          optional subfolder to scope the .cs walk to; paths
+//                          links (else derived from the git root). csharp/sql: an
+//                          optional subfolder to scope the .cs/.sql walk to; paths
 //                          are always emitted repo-root-relative.
 //
 // Manifest shape (additive — `files` keeps its prior meaning): files, srcRoot,
-// regions, hasDom, lens ("ui" | "types"), and — in csharp mode — types (a
-// per-type outline, each with a members list). Plus generatedAt/sha unless
+// regions, hasDom, lens ("ui" | "types" | "sql"), and — in csharp mode — types
+// (a per-type outline, each with a members list), or — in sql mode — tables (a
+// per-table outline, each with a columns list). Plus generatedAt/sha unless
 // deterministic. A repo with no source is handled gracefully (empty
-// files/regions/types, hasDom:false).
+// files/regions/types/tables, hasDom:false).
 // ─────────────────────────────────────────────────────────────────
 
 const fs = require('fs');
@@ -348,6 +352,105 @@ function buildCsharpManifest() {
   return { files: files, srcRoot: '', regions: [], hasDom: false, types: types, lens: 'types' };
 }
 
+// ── sql mode: recursive .sql inventory, repo-root-relative paths ──
+// Regex parse of each .sql into its CREATE TABLE blocks and their columns +
+// table-level constraints, for the Structure tab's SQL lens. Like the csharp
+// scanner it's best-effort, NOT a SQL parser: it assumes the common one-
+// definition-per-line CREATE TABLE style (multi-line body, ')' closing on its
+// own line). A column/constraint line becomes the row `signature`; a REFERENCES
+// clause surfaces as `ref` for inline FK rendering. lens:'sql' + a `tables`
+// array mirror csharp's lens:'types' + `types`, so one outline renderer serves
+// both (table ↔ type, column ↔ member).
+const SQL_MAX_TABLES_TOTAL = 600;
+const SQL_MAX_COLS_PER_TABLE = 120;
+const SQL_SKIP_DIRS = { '.git': 1, node_modules: 1, dist: 1, '.vs': 1, '.idea': 1 };
+const SQL_CREATE_RE = /^\s*CREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP(?:ORARY)?\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?([A-Za-z_][\w.]*)["'`]?/i;
+const SQL_CONSTRAINT_RE = /^(?:PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|CONSTRAINT|EXCLUDE|LIKE)\b/i;
+const SQL_REF_RE = /REFERENCES\s+["'`]?([A-Za-z_][\w.]*)["'`]?\s*(?:\(\s*["'`]?(\w+)["'`]?\s*\))?/i;
+
+function walkSql(start) {
+  const out = [];
+  (function rec(dir) {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    ents.forEach(function (e) {
+      if (e.isDirectory()) {
+        if (!SQL_SKIP_DIRS[e.name] && e.name.charAt(0) !== '.') rec(path.join(dir, e.name));
+      } else if (/\.sql$/i.test(e.name)) {
+        out.push(path.join(dir, e.name));
+      }
+    });
+  })(start);
+  return out;
+}
+
+function sqlClean(s) { return String(s == null ? '' : s).replace(/,\s*$/, '').replace(/\s+/g, ' ').trim(); }
+
+// One line inside a CREATE TABLE body → a column or a table-level constraint.
+function parseSqlMember(rawLine, lineNo) {
+  const trimmed = rawLine.trim();
+  if (!trimmed || trimmed.indexOf('--') === 0) return null;
+  const signature = sqlClean(rawLine);
+  if (!signature) return null;
+  const refM = SQL_REF_RE.exec(trimmed);
+  const ref = refM ? (refM[2] ? refM[1] + '(' + refM[2] + ')' : refM[1]) : null;
+  if (SQL_CONSTRAINT_RE.test(trimmed)) {
+    const named = /^CONSTRAINT\s+["'`]?(\w+)/i.exec(trimmed);
+    const kw = /^(PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|EXCLUDE|LIKE)/i.exec(trimmed);
+    const name = named ? named[1] : (kw ? kw[1].replace(/\s+/g, ' ').toUpperCase() : 'constraint');
+    return { name: name, kind: 'constraint', signature: signature, line: lineNo, ref: ref };
+  }
+  const nameM = /^["'`]?([A-Za-z_]\w*)["'`]?/.exec(trimmed);
+  const name = nameM ? nameM[1] : firstToken(trimmed);
+  return { name: name, kind: 'column', signature: signature, line: lineNo, ref: ref };
+}
+
+function scanSqlTables(rawSrc, relPath) {
+  const lines = String(rawSrc == null ? '' : rawSrc).split(/\r?\n/);
+  const tables = [];
+  let cur = null, open = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], lineNo = i + 1;
+    if (!cur) {
+      const m = SQL_CREATE_RE.exec(line);
+      // '(' may sit on the CREATE line or a later one; wait for it before
+      // reading column/constraint lines.
+      if (m) { cur = { name: m[1], kind: 'table', file: relPath, line: lineNo, columns: [] }; open = line.indexOf('(') !== -1; }
+      continue;
+    }
+    if (!open) { if (line.indexOf('(') !== -1) open = true; continue; }
+    if (/^\s*\)/.test(line)) { tables.push(cur); cur = null; open = false; continue; }
+    if (cur.columns.length >= SQL_MAX_COLS_PER_TABLE) continue;
+    const member = parseSqlMember(line, lineNo);
+    if (member) cur.columns.push(member);
+  }
+  if (cur) tables.push(cur); // unterminated block — keep what we have
+  return tables;
+}
+
+function buildSqlManifest() {
+  const walkRoot = process.env.MANIFEST_SRC_ROOT ? path.resolve(repoRoot, process.env.MANIFEST_SRC_ROOT) : repoRoot;
+  let absFiles = [];
+  try { absFiles = walkSql(walkRoot); } catch (e) { absFiles = []; }
+  const rel = function (p) { return path.relative(repoRoot, p).split(path.sep).join('/'); };
+  const files = absFiles.map(rel).sort();
+  // Best-effort table outline for the Structure tab's SQL lens. Read each .sql
+  // and extract its CREATE TABLE blocks; bounded so a large schema can't bloat
+  // the manifest.
+  const tables = [];
+  absFiles.forEach(function (abs) {
+    if (tables.length >= SQL_MAX_TABLES_TOTAL) return;
+    let text;
+    try { text = fs.readFileSync(abs, 'utf8'); } catch (e) { return; }
+    scanSqlTables(text, rel(abs)).forEach(function (t) { if (tables.length < SQL_MAX_TABLES_TOTAL) tables.push(t); });
+  });
+  tables.sort(function (a, b) { return a.file < b.file ? -1 : a.file > b.file ? 1 : a.line - b.line; });
+  // No DOM: empty regions + hasDom:false. Paths are repo-root-relative so
+  // srcRoot stays empty. lens:'sql' tells the Structure tab to show the table
+  // outline (Code | SQL) instead of the DOM map (Code | UI).
+  return { files: files, srcRoot: '', regions: [], hasDom: false, tables: tables, lens: 'sql' };
+}
+
 function finalize(base) {
   const deterministic = process.env.MANIFEST_DETERMINISTIC === 'true';
   return deterministic
@@ -356,13 +459,14 @@ function finalize(base) {
 }
 
 function buildManifest() {
-  const base = (LANG === 'csharp' || LANG === 'cs' || LANG === 'dotnet')
-    ? buildCsharpManifest()
-    : buildWebManifest();
+  let base;
+  if (LANG === 'csharp' || LANG === 'cs' || LANG === 'dotnet') base = buildCsharpManifest();
+  else if (LANG === 'sql' || LANG === 'postgres' || LANG === 'postgresql') base = buildSqlManifest();
+  else base = buildWebManifest();
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs };
+module.exports = { scanRegions: scanRegions, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql };
 
 if (require.main === module) {
   const manifest = buildManifest();
@@ -372,6 +476,7 @@ if (require.main === module) {
     'src-manifest.json [' + LANG + '] written to ' + outDirName + '/ —',
     manifest.files.length, 'files,',
     manifest.regions.length, 'regions,',
-    (manifest.types ? manifest.types.length : 0), 'types, hasDom=' + manifest.hasDom + ', lens=' + manifest.lens
+    (manifest.types ? manifest.types.length : 0), 'types,',
+    (manifest.tables ? manifest.tables.length : 0), 'tables, hasDom=' + manifest.hasDom + ', lens=' + manifest.lens
   );
 }
