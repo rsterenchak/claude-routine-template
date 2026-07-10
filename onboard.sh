@@ -84,6 +84,10 @@ NODE_FILES=(
 #     maui-android workload). No web deploy, no manifest. Fetched from the
 #     template as test-maui.yml -> test.yml. Detected BEFORE desktop, since a
 #     MAUI multi-target usually lists net*-windows too.
+#   sql (.sql schema/migrations repo): no build, no test. Publishes a source
+#     manifest in sql mode (CREATE TABLE -> column outline) served from main
+#     root, like the .NET manifest path. Gets manifest-sql.yml -> manifest.yml
+#     plus the generator; no test workflow.
 BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
@@ -98,6 +102,15 @@ MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
 DOTNET_MANIFEST_FILES=(
   "scripts/gen-src-manifest.js"
   ".github/workflows/manifest-dotnet.yml>.github/workflows/manifest.yml"
+)
+# SQL manifest publishing — the same scanner run in sql mode + a publish
+# workflow that serves src-manifest.json from main root (like served-from-
+# source), so the Structure tab gets a Code lens + a SQL table outline. No test
+# workflow (nothing to test in a schema repo); the generator alone + its
+# publish workflow. Written to the target as plain manifest.yml (SRC>DEST).
+SQL_MANIFEST_FILES=(
+  "scripts/gen-src-manifest.js"
+  ".github/workflows/manifest-sql.yml>.github/workflows/manifest.yml"
 )
 TEMPLATE_FILES=()  # assembled after shape detection
 
@@ -330,10 +343,27 @@ if [ "$IS_DOTNET" != "true" ]; then
   [ "${BUILD_CMD#\(}" = "$BUILD_CMD" ] && HAS_BUILD="true"   # BUILD_CMD doesn't start with "(not detected"
   HAS_ROOT_HTML="false"
   [ -f "$TARGET/index.html" ] && HAS_ROOT_HTML="true"
+  # SQL shape signal: .sql files present in a repo with no package.json (and not
+  # .NET, handled above). A schema/migrations repo — no build, no test, but it
+  # DOES publish a source manifest (Code + SQL lens), unlike repo-only.
+  HAS_SQL="false"
+  if find "$TARGET" -maxdepth 4 -name '*.sql' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | grep -q .; then
+    HAS_SQL="true"
+  fi
 
   SHAPE="unknown"
   SHAPE_REASON=""
-  if [ "$HAS_BUILD" = "true" ] && [ "$HAS_BUNDLER" = "true" ]; then
+  if [ -z "$PKG" ] && [ "$HAS_SQL" = "true" ]; then
+    # .sql files, no package.json → schema/migrations repo. Walk the repo root
+    # (paths emitted repo-root-relative), publish the manifest in sql mode. No
+    # build/test workflow — like repo-only, but with a manifest.
+    SHAPE="sql"
+    SHAPE_REASON="no package.json, no .NET — .sql files present (schema/migrations repo)"
+    SRC_PREFIX=""
+    TEST_CMD="none (sql — schema/migrations repo)"
+    BUILD_CMD="none (sql — schema/migrations repo)"
+    MANIFEST_VARIANT="gen-src-manifest.js"
+  elif [ "$HAS_BUILD" = "true" ] && [ "$HAS_BUNDLER" = "true" ]; then
     SHAPE="build-pipeline"
     SHAPE_REASON="has a build script and a bundler config"
   elif [ "$HAS_BUILD" != "true" ] && { [ "$HAS_ROOT_HTML" = "true" ] || [ -d "$WD_ABS/src" ]; }; then
@@ -366,6 +396,9 @@ echo "  working dir:      $WORKING_DIR"
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   echo "  language:         C# / .NET"
   echo "  manifest variant: gen-src-manifest.js (csharp mode — published to Pages)"
+elif [ "$SHAPE" = "sql" ]; then
+  echo "  type:             SQL (schema/migrations repo — no build, test, or deploy)"
+  echo "  manifest variant: gen-src-manifest.js (sql mode — published to Pages)"
 elif [ "$SHAPE" = "repo-only" ]; then
   echo "  type:             backlog/storage repo (no build, test, or deploy)"
   echo "  manifest variant: none (repo-only — no manifest publishing)"
@@ -383,12 +416,13 @@ echo "  ${c_dim}served-from-source -> manifest.yml (regenerate + commit manifest
 echo "  ${c_dim}console          -> dotnet test (ubuntu) + publish src-manifest.json to Pages${c_rst}"
 echo "  ${c_dim}desktop          -> dotnet test (windows-latest, WinForms/WPF) + manifest to Pages${c_rst}"
 echo "  ${c_dim}maui             -> dotnet MAUI Android build (ubuntu) + manifest to Pages${c_rst}"
+echo "  ${c_dim}sql              -> .sql schema/migrations: publish table-outline manifest to Pages${c_rst}"
 echo "  ${c_dim}repo-only        -> backlog/storage repo: routine + TODO only, no test/deploy/manifest${c_rst}"
 echo
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
-  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui'/'repo' to override] " shape_confirm
+  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " shape_confirm
 else
-  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui'/'repo' to override] " shape_confirm
+  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " shape_confirm
 fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
@@ -397,9 +431,10 @@ case "$shape_confirm" in
   console*|[cC]) SHAPE="console"; echo "  -> overridden to console" ;;
   desktop*|[dD]) SHAPE="desktop"; echo "  -> overridden to desktop" ;;
   maui*|[mM]) SHAPE="maui"; echo "  -> overridden to maui" ;;
+  [sS][qQ][lL]*) SHAPE="sql"; echo "  -> overridden to sql" ;;
   repo*|none*|[rR]) SHAPE="repo-only"; echo "  -> overridden to repo-only" ;;
   [nN]|[nN][oO])
-    echo "Which shape? Type 'build', 'served', 'console', 'desktop', 'maui', or 'repo':"
+    echo "Which shape? Type 'build', 'served', 'console', 'desktop', 'maui', 'sql', or 'repo':"
     read -r shape_pick
     case "$shape_pick" in
       build*) SHAPE="build-pipeline" ;;
@@ -407,8 +442,9 @@ case "$shape_confirm" in
       console*|[cC]) SHAPE="console" ;;
       desktop*|[dD]) SHAPE="desktop" ;;
       maui*|[mM]) SHAPE="maui" ;;
+      [sS][qQ][lL]*) SHAPE="sql" ;;
       repo*|none*|[rR]) SHAPE="repo-only" ;;
-      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, desktop, maui, or repo."; exit 1 ;;
+      *) echo "Unrecognized. Aborting — re-run and pick build, served, console, desktop, maui, sql, or repo."; exit 1 ;;
     esac
     echo "  -> set to $SHAPE"
     ;;
@@ -489,6 +525,9 @@ case "$SHAPE" in
     ;;
   maui)
     TEMPLATE_FILES+=( "${MAUI_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
+    ;;
+  sql)
+    TEMPLATE_FILES+=( "${SQL_MANIFEST_FILES[@]}" )   # manifest only — nothing to test
     ;;
   repo-only)
     : # universal files only — no test/deploy/manifest workflow
@@ -630,6 +669,18 @@ if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]
   MANIFEST_SRC_ROOT_VAL="${SRC_PREFIX%/}"
   read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
   DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
+elif [ "$SHAPE" = "sql" ]; then
+  # SQL schema/migrations repo — no build pipeline, but it publishes a manifest
+  # (sql mode). MANIFEST_SRC_ROOT scopes the .sql walk; blank for a repo whose
+  # .sql sit at the root (the common case), which equals the "" srcPrefix in the
+  # worker's ALLOWED_TARGETS so emitted paths resolve for chat attachment.
+  TEST_CMD_VAL="none"
+  BUILD_CMD_VAL="none"
+  INSTALL_CMD_VAL="none"
+  BUILD_DIR_VAL="n/a"
+  DEPLOY_TARGET_VAL="GitHub Pages (source manifest only — no app deploy)"
+  SRC_DIR_VAL=""
+  MANIFEST_SRC_ROOT_VAL="${SRC_PREFIX%/}"
 elif [ "$SHAPE" = "repo-only" ]; then
   # Backlog/storage repo — no build pipeline. These read as "none" in the filled
   # CLAUDE.md/routine.md, which use the values descriptively (not as forced runs).
@@ -673,6 +724,7 @@ case "$SHAPE" in
   console)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   desktop)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   maui)               PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
+  sql)                PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   repo-only)          : ;;  # repo-only has no shape-specific workflow
 esac
 for pf in "${PLACEHOLDER_FILES[@]}"; do
@@ -758,9 +810,9 @@ if [ "$USE_GH" = "true" ]; then
           echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
         fi
         ;;
-      console|desktop|maui)
-        # .NET shapes publish src-manifest.json to Pages (served from main
-        # root, like served-from-source) so the Structure tab can fetch it.
+      console|desktop|maui|sql)
+        # .NET and SQL shapes publish src-manifest.json to Pages (served from
+        # main root, like served-from-source) so the Structure tab can fetch it.
         if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
              -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
           echo "  ${c_grn}set${c_rst}    Pages source: main branch, root (serves src-manifest.json)"
