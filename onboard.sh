@@ -159,6 +159,29 @@ ni_read_secret() {
   read -rs "$__niv"
 }
 
+# enable_pages_main_root "<label suffix>" — enable GitHub Pages serving from
+# main/root (served-from-source and the .NET/SQL manifest shapes, which commit
+# src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
+# it — PUT only UPDATES an existing site and 404s when there is none, which was
+# the "FAILED Pages source config" cause on fresh onboards. POST creates the site
+# WITH the source set; a 409 means it already exists (already enabled), so that's
+# also success. Any other failure surfaces the real API error instead of being
+# swallowed. Non-fatal (always returns 0) — a Pages hiccup shouldn't abort the
+# onboard. Sets GH_PAGES_DONE on success.
+enable_pages_main_root() {
+  local __label="$1" __out __rc=0
+  __out=$(gh api -X POST "/repos/$REPO_FOR_GH/pages" \
+    -f "source[branch]=main" -f "source[path]=/" 2>&1) || __rc=$?
+  if [ "$__rc" -eq 0 ] || printf '%s' "$__out" | grep -qiE "409|already exists"; then
+    echo "  ${c_grn}set${c_rst}    Pages source: main branch, root${__label}"
+    GH_PAGES_DONE=true
+    return 0
+  fi
+  echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> main / root)"
+  echo "         ${c_dim}${__out}${c_rst}"
+  return 0
+}
+
 # ─────────────────────────────────────────────────────────────────
 # 1. Validate target
 # ─────────────────────────────────────────────────────────────────
@@ -831,24 +854,12 @@ if [ "$USE_GH" = "true" ]; then
         fi
         ;;
       served-from-source)
-        if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
-             -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
-          echo "  ${c_grn}set${c_rst}    Pages source: main branch, root"
-          GH_PAGES_DONE=true
-        else
-          echo "  ${c_red}FAILED${c_rst} Pages source config (set manually in Settings -> Pages)"
-        fi
+        enable_pages_main_root ""
         ;;
       console|desktop|maui|sql)
         # .NET and SQL shapes publish src-manifest.json to Pages (served from
         # main root, like served-from-source) so the Structure tab can fetch it.
-        if gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
-             -f "source[branch]=main" -f "source[path]=/" >/dev/null 2>&1; then
-          echo "  ${c_grn}set${c_rst}    Pages source: main branch, root (serves src-manifest.json)"
-          GH_PAGES_DONE=true
-        else
-          echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> main / root)"
-        fi
+        enable_pages_main_root " (serves src-manifest.json)"
         ;;
       repo-only)
         # No Pages for repo-only — no manifest to serve.
