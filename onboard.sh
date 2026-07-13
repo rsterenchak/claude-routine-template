@@ -129,6 +129,35 @@ c_red=$'\033[31m'; c_rst=$'\033[0m'
 
 die() { echo "${c_red}error:${c_rst} $*" >&2; exit 1; }
 info() { echo "${c_dim}$*${c_rst}"; }
+# ─────────────────────────────────────────────────────────────────
+# Non-interactive mode
+# When ONBOARD_NONINTERACTIVE=1 (set explicitly, or inferred from CI), every
+# prompt answer is taken from the environment instead of the terminal, so the
+# script can run head-less in CI (onboard.yml drives it this way). Unset ->
+# unchanged interactive behavior, so laptop runs are identical to before.
+# Value inputs (project name, tokens, Supabase creds) come from ONBOARD_* /
+# secret env vars; y/N confirmations get a fixed auto-answer chosen per prompt.
+# ─────────────────────────────────────────────────────────────────
+NONINTERACTIVE="${ONBOARD_NONINTERACTIVE:-}"
+if [ -z "$NONINTERACTIVE" ] && [ -n "${CI:-}" ]; then NONINTERACTIVE=1; fi
+
+# ni_read VAR "prompt" "ni_value" — interactive: read VAR from the terminal;
+# non-interactive: VAR=ni_value (no terminal read).
+ni_read() {
+  local __niv="$1"; local __nip="$2"; local __nid="$3"
+  if [ -n "$NONINTERACTIVE" ]; then printf -v "$__niv" '%s' "$__nid"; return 0; fi
+  read -r -p "$__nip" "$__niv"
+}
+
+# ni_read_secret VAR "prompt" "ni_value" — same, but no echo on the interactive
+# read (the caller prints its own hidden-input prompt just above) and no trailing
+# newline; the existing 'echo' after the original read still supplies it.
+ni_read_secret() {
+  local __niv="$1"; local __nip="$2"; local __nid="$3"
+  if [ -n "$NONINTERACTIVE" ]; then printf -v "$__niv" '%s' "$__nid"; return 0; fi
+  [ -n "$__nip" ] && printf '%s' "$__nip"
+  read -rs "$__niv"
+}
 
 # ─────────────────────────────────────────────────────────────────
 # 1. Validate target
@@ -156,7 +185,7 @@ if [ -f "$TARGET/.claude/routine.md" ]; then
   echo "  Re-running is safe (the script never overwrites existing files), but it's"
   echo "  usually accidental. Continue only if you want to pick up template files added"
   echo "  since the first onboarding."
-  read -r -p "  Continue anyway? [y/N] " reonboard_confirm
+  ni_read reonboard_confirm "  Continue anyway? [y/N] " "y"
   case "$reonboard_confirm" in
     [yY]|[yY][eE][sS]) echo "  -> continuing"; echo ;;
     *) echo "  Aborted. No changes made."; exit 0 ;;
@@ -179,7 +208,7 @@ if [ -f "$TARGET/.claude/routine.md" ]; then
       echo "  they never reach origin. Push them first:"
       echo "      ${c_dim}git -C \"$TARGET\" push origin ${ob_branch}${c_rst}"
       echo "      ${c_dim}(403? unset GITHUB_TOKEN && gh auth setup-git, then retry the push)${c_rst}"
-      read -r -p "  Stop here so you can push first? [Y/n] " ob_push_first
+      ni_read ob_push_first "  Stop here so you can push first? [Y/n] " "n"
       case "$ob_push_first" in
         [nN]|[nN][oO]) echo "  -> continuing anyway"; echo ;;
         *) echo "  Stopped. Push the commits above, then re-run if you still need files."; exit 0 ;;
@@ -420,9 +449,9 @@ echo "  ${c_dim}sql              -> .sql schema/migrations: publish table-outlin
 echo "  ${c_dim}repo-only        -> backlog/storage repo: routine + TODO only, no test/deploy/manifest${c_rst}"
 echo
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
-  read -r -p "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " shape_confirm
+  ni_read shape_confirm "Detected a C#/.NET $SHAPE project. Correct? [Y/n, or 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " "${ONBOARD_SHAPE:-y}"
 else
-  read -r -p "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " shape_confirm
+  ni_read shape_confirm "Is the deploy shape correct? [Y/n, or type 'build'/'served'/'console'/'desktop'/'maui'/'sql'/'repo' to override] " "${ONBOARD_SHAPE:-y}"
 fi
 case "$shape_confirm" in
   ""|[yY]|[yY][eE][sS]) ;;
@@ -435,7 +464,7 @@ case "$shape_confirm" in
   repo*|none*|[rR]) SHAPE="repo-only"; echo "  -> overridden to repo-only" ;;
   [nN]|[nN][oO])
     echo "Which shape? Type 'build', 'served', 'console', 'desktop', 'maui', 'sql', or 'repo':"
-    read -r shape_pick
+    ni_read shape_pick "" "${ONBOARD_SHAPE:-repo}"
     case "$shape_pick" in
       build*) SHAPE="build-pipeline" ;;
       served*) SHAPE="served-from-source" ;;
@@ -465,7 +494,7 @@ echo
 echo "${c_bold}What's this project for?${c_rst}"
 echo "  ${c_dim}Personal: a project you're building for yourself, work, or open source.${c_rst}"
 echo "  ${c_dim}Assignment: coursework or a graded assignment with a spec, constraints, due date.${c_rst}"
-read -r -p "  [P]ersonal (default) / [A]ssignment: " purpose_pick
+ni_read purpose_pick "  [P]ersonal (default) / [A]ssignment: " "${ONBOARD_PURPOSE:-P}"
 case "$purpose_pick" in
   ""|[pP]|[pP][eE][rR]*) PURPOSE="personal" ;;
   [aA]|[aA][sS][sS]*) PURPOSE="assignment" ;;
@@ -491,7 +520,7 @@ if command -v gh >/dev/null 2>&1; then
     echo "${c_bold}gh CLI detected and authenticated${c_rst}"
     echo "  ${c_dim}Can auto-configure: workflow permissions, Pages source, and the OAuth token secret.${c_rst}"
     echo "  ${c_dim}Saying no falls back to manual instructions (current behavior).${c_rst}"
-    read -r -p "  Auto-configure these via gh CLI? [Y/n] " gh_confirm
+    ni_read gh_confirm "  Auto-configure these via gh CLI? [Y/n] " "y"
     case "$gh_confirm" in
       ""|[yY]|[yY][eE][sS]) USE_GH=true; echo "  -> will auto-configure after file creation" ;;
       *) USE_GH=false; echo "  -> skipping gh auto-config, will print manual steps as usual" ;;
@@ -548,7 +577,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   fi
 done
 echo
-read -r -p "Proceed with creating the missing files above? [y/N] " confirm
+ni_read confirm "Proceed with creating the missing files above? [y/N] " "y"
 case "$confirm" in
   [yY]|[yY][eE][sS]) WRITE_FILES=true ;;
   *) WRITE_FILES=false
@@ -639,14 +668,14 @@ echo
 NAME_DEFAULT="$(basename "$REPO_GUESS")"
 [ "$NAME_DEFAULT" = "<repo>" ] && NAME_DEFAULT="$(basename "$TARGET")"
 
-read -r -p "  Project name [${NAME_DEFAULT}]: " IN_NAME
+ni_read IN_NAME "  Project name [${NAME_DEFAULT}]: " "${ONBOARD_NAME:-}"
 PROJECT_NAME="${IN_NAME:-$NAME_DEFAULT}"
 
-read -r -p "  One-line description: " IN_DESC
+ni_read IN_DESC "  One-line description: " "${ONBOARD_DESC:-}"
 PROJECT_DESCRIPTION="${IN_DESC:-(fill in a one-line description)}"
 
 STACK_DEFAULT="$([ "$IS_ESM" = "true" ] && echo "ESM (type: module)" || echo "CommonJS")"
-read -r -p "  Stack [${STACK_DEFAULT}]: " IN_STACK
+ni_read IN_STACK "  Stack [${STACK_DEFAULT}]: " "${ONBOARD_STACK:-}"
 STACK="${IN_STACK:-$STACK_DEFAULT}"
 
 # Derived defaults for the remaining slots, falling back to readable hints when
@@ -667,7 +696,7 @@ if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]
   # srcPrefix sans trailing slash, so emitted paths start with that prefix —
   # which is what makes the worker resolve them for chat attachment.
   MANIFEST_SRC_ROOT_VAL="${SRC_PREFIX%/}"
-  read -r -p "  .NET SDK version [8.0.x]: " IN_DOTNET
+  ni_read IN_DOTNET "  .NET SDK version [8.0.x]: " "${ONBOARD_DOTNET:-}"
   DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
 elif [ "$SHAPE" = "sql" ]; then
   # SQL schema/migrations repo — no build pipeline, but it publishes a manifest
@@ -829,11 +858,11 @@ if [ "$USE_GH" = "true" ]; then
     # 3. OAuth secret — optional, prompted separately because it requires the
     # user to provide the token value. Uses read -s to suppress echo (the token
     # never appears on-screen or in shell history).
-    read -r -p "  Add CLAUDE_CODE_OAUTH_TOKEN secret now? [y/N] " secret_confirm
+    ni_read secret_confirm "  Add CLAUDE_CODE_OAUTH_TOKEN secret now? [y/N] " "$([ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && echo y || echo n)"
     case "$secret_confirm" in
       [yY]|[yY][eE][sS])
         echo -n "    Paste your OAuth token (input hidden, press Enter when done): "
-        read -rs oauth_token
+        ni_read_secret oauth_token "" "${CLAUDE_CODE_OAUTH_TOKEN:-}"
         echo
         if [ -n "$oauth_token" ]; then
           if printf '%s' "$oauth_token" | gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo "$REPO_FOR_GH" >/dev/null 2>&1; then
@@ -860,12 +889,12 @@ if [ "$USE_GH" = "true" ]; then
     # and isn't. Use the LEGACY service_role JWT (the routine's curls send it on
     # the Authorization: Bearer header, which the new sb_secret_... keys reject).
     echo
-    read -r -p "  Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets now? [y/N] " supa_confirm
+    ni_read supa_confirm "  Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets now? [y/N] " "$([ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && echo y || echo n)"
     case "$supa_confirm" in
       [yY]|[yY][eE][sS])
-        read -r -p "    SUPABASE_URL (https://<ref>.supabase.co, no /rest/v1): " supa_url
+        ni_read supa_url "    SUPABASE_URL (https://<ref>.supabase.co, no /rest/v1): " "${SUPABASE_URL:-}"
         echo -n "    SUPABASE_SERVICE_ROLE_KEY (input hidden, press Enter when done): "
-        read -rs supa_key
+        ni_read_secret supa_key "" "${SUPABASE_SERVICE_ROLE_KEY:-}"
         echo
         if [ -n "$supa_url" ] && [ -n "$supa_key" ]; then
           supa_ok=true
@@ -925,7 +954,7 @@ if [ "${CODESPACES:-}" = "true" ]; then
     echo "  write access to the target repo. ${c_bold}git push will fail${c_rst} until git's credentials"
     echo "  are swapped to your full user credentials via gh."
     echo "  ${c_dim}Standard fix: unset GITHUB_TOKEN, gh auth login (if needed), gh auth setup-git.${c_rst}"
-    read -r -p "  Fix Codespace auth now? [Y/n] " auth_confirm
+    ni_read auth_confirm "  Fix Codespace auth now? [Y/n] " "n"
     case "$auth_confirm" in
       ""|[yY]|[yY][eE][sS])
         echo "  ${c_dim}-> clearing GITHUB_TOKEN for this script's subprocess...${c_rst}"
@@ -1010,7 +1039,7 @@ if [ ${#files_created[@]} -gt 0 ]; then
   echo "${c_bold}Commit + push${c_rst}"
   echo "  ${#files_created[@]} files ready to commit. Will stage ONLY the files this run created"
   echo "  (other untracked files in the target are left alone). Target branch: ${c_bold}$TARGET_BRANCH${c_rst}"
-  read -r -p "  Commit and push the scaffolded files to $TARGET_BRANCH now? [Y/n] " commit_confirm
+  ni_read commit_confirm "  Commit and push the scaffolded files to $TARGET_BRANCH now? [Y/n] " "y"
   case "$commit_confirm" in
     ""|[yY]|[yY][eE][sS])
       # Stage only files this run authored. Use -C so we don't have to cd.
@@ -1040,6 +1069,7 @@ if [ ${#files_created[@]} -gt 0 ]; then
         echo "  ${c_dim}-> pushing to origin/$TARGET_BRANCH...${c_rst}"
         if git -C "$TARGET" push origin "$TARGET_BRANCH"; then
           echo "  ${c_grn}pushed${c_rst}    origin/$TARGET_BRANCH is now in sync"
+          PUSH_OK=true
         else
           echo
           echo "  ${c_red}push failed${c_rst} (see git output above for the actual error)"
@@ -1059,6 +1089,51 @@ if [ ${#files_created[@]} -gt 0 ]; then
       echo
       ;;
   esac
+fi
+
+# ─────────────────────────────────────────────────────────────────
+# 4d. Registry insert (non-interactive / CI only)
+# Add this repo to the shared Supabase inject_targets table so the Worker's
+# allowlist and the app's workspace list pick it up with no redeploy — the piece
+# that makes onboard.yml a single action. Runs only when the scaffold actually
+# reached origin (PUSH_OK) and the Supabase creds + user id are present, so a
+# registry row never exists for a repo that failed to push. Interactive laptop
+# runs skip this (the +Add target UI already registers repos, and a local run
+# doesn't have the creds exported anyway). Check-then-insert so re-onboarding an
+# already-registered repo is a no-op, not a duplicate row — no assumption about a
+# unique constraint on inject_targets.repo.
+# ─────────────────────────────────────────────────────────────────
+if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
+   && [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] \
+   && [ -n "${ONBOARD_USER_ID:-}" ] && [ -n "${REPO_FOR_GH:-}" ]; then
+  echo "${c_bold}Registry${c_rst}"
+  reg_base="${SUPABASE_URL%/}"
+  reg_nickname="${ONBOARD_NICKNAME:-${PROJECT_NAME:-$REPO_FOR_GH}}"
+  reg_src_prefix="${SRC_PREFIX:-}"
+  case "$reg_src_prefix" in "("*) reg_src_prefix="" ;; esac
+  reg_existing=$(curl -sS \
+    "$reg_base/rest/v1/inject_targets?select=id&repo=eq.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
+    -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+    -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" 2>/dev/null || echo "")
+  if printf '%s' "$reg_existing" | grep -q '"id"'; then
+    echo "  ${c_dim}already registered${c_rst} $REPO_FOR_GH is already an inject target — leaving it as-is"
+  else
+    reg_payload=$(printf '{"user_id":"%s","nickname":"%s","repo":"%s","file_path":"TODO.md","src_prefix":"%s","shape":"%s","enabled":true}' \
+      "$ONBOARD_USER_ID" "$reg_nickname" "$REPO_FOR_GH" "$reg_src_prefix" "$SHAPE")
+    reg_status=$(curl -sS -o /dev/null -w '%{http_code}' \
+      -X POST "$reg_base/rest/v1/inject_targets" \
+      -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+      -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+      -H "Content-Type: application/json" \
+      -H "Prefer: return=minimal" \
+      -d "$reg_payload" 2>/dev/null || echo "000")
+    if [ "$reg_status" = "201" ] || [ "$reg_status" = "200" ] || [ "$reg_status" = "204" ]; then
+      echo "  ${c_grn}registered${c_rst} $REPO_FOR_GH in inject_targets (shape: $SHAPE, enabled)"
+    else
+      echo "  ${c_red}FAILED${c_rst} registry insert returned HTTP $reg_status — add the target manually in the app"
+    fi
+  fi
+  echo
 fi
 
 # ─────────────────────────────────────────────────────────────────
