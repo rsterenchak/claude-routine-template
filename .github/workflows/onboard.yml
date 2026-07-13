@@ -80,8 +80,11 @@ jobs:
           set -euo pipefail
           # Full clone (not shallow) so onboard.sh's upstream / commit / push
           # semantics behave exactly as they do on a laptop. Token lives only in
-          # this ephemeral runner's remote URL and is masked above.
-          git clone "https://x-access-token:${PAT}@github.com/${TARGET_REPO}.git" target-repo
+          # this ephemeral runner's remote URL and is masked above. NOTE: no ".git"
+          # suffix — onboard.sh derives the repo slug from the origin URL and its
+          # sed does not strip a trailing ".git", so "...repo.git" would corrupt
+          # the slug to "repo.git" (bad gh calls + a wrong registry row).
+          git clone "https://x-access-token:${PAT}@github.com/${TARGET_REPO}" target-repo
 
       - name: Onboard (non-interactive)
         env:
