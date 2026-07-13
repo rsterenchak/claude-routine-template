@@ -1,0 +1,118 @@
+name: Onboard a repo
+
+# Route B orchestrator: runs onboard.sh (the single onboarding brain) head-lessly
+# against a target repo. Dispatched by the Worker's onboard route (piece 3) or
+# manually from the Actions tab. It clones the target with a cross-repo PAT and
+# runs onboard.sh in non-interactive mode; onboard.sh itself scaffolds the files,
+# sets the repo's secrets (via `gh secret set`), configures workflow permissions
+# + Pages, and inserts the inject_targets registry row. This workflow only gives
+# it the environment + credentials, then verifies the scaffold reached origin.
+#
+# Required control-repo Actions secrets (Settings -> Secrets and variables ->
+# Actions, on THIS repo):
+#   ONBOARD_PAT                 fine-grained PAT with access to all target repos,
+#                               Repository permissions: Contents RW, Actions RW,
+#                               Pages RW, Secrets RW, Administration RW (workflow
+#                               permissions), Metadata R. Used as GH_TOKEN and to
+#                               clone/push the target.
+#   CLAUDE_CODE_OAUTH_TOKEN     Anthropic subscription token, propagated to the target.
+#   SUPABASE_URL                https://<ref>.supabase.co (no /rest/v1).
+#   SUPABASE_SERVICE_ROLE_KEY   legacy service_role JWT (PostgREST Bearer rejects sb_secret_*).
+#   ONBOARD_USER_ID             your Supabase auth user id (for the registry row).
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Repo to onboard (owner/name)"
+        required: true
+        type: string
+      shape:
+        description: "Project shape (auto = detect from repo contents)"
+        required: false
+        type: choice
+        default: auto
+        options: [auto, build, served, console, desktop, maui, sql, repo]
+      nickname:
+        description: "Inject-target label (blank = repo name)"
+        required: false
+        type: string
+        default: ""
+      purpose:
+        description: "CLAUDE.md purpose"
+        required: false
+        type: choice
+        default: personal
+        options: [personal, assignment]
+
+# Serialize onboarding of the same repo so two dispatches can't race on the push.
+concurrency:
+  group: onboard-${{ inputs.target_repo }}
+  cancel-in-progress: false
+
+# The cross-repo work uses ONBOARD_PAT, not GITHUB_TOKEN; the default token only
+# needs read access to check out this template repo for onboard.sh.
+permissions:
+  contents: read
+
+jobs:
+  onboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the routine template (for onboard.sh)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Mask the PAT in logs
+        run: echo "::add-mask::${{ secrets.ONBOARD_PAT }}"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "claude-onboard[bot]"
+          git config --global user.email "claude-onboard@users.noreply.github.com"
+
+      - name: Clone the target repo
+        env:
+          PAT: ${{ secrets.ONBOARD_PAT }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          # Full clone (not shallow) so onboard.sh's upstream / commit / push
+          # semantics behave exactly as they do on a laptop. Token lives only in
+          # this ephemeral runner's remote URL and is masked above.
+          git clone "https://x-access-token:${PAT}@github.com/${TARGET_REPO}.git" target-repo
+
+      - name: Onboard (non-interactive)
+        env:
+          ONBOARD_NONINTERACTIVE: "1"
+          # gh (used by onboard.sh for `gh api` + `gh secret set`) reads GH_TOKEN.
+          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
+          # auto => empty, so onboard.sh runs its own shape detection. Written as
+          # `!= 'auto' && shape || ''` (not `== 'auto' && '' || shape`) because an
+          # empty-string true-branch is falsy and would fall through the || to shape.
+          ONBOARD_SHAPE: ${{ inputs.shape != 'auto' && inputs.shape || '' }}
+          ONBOARD_NICKNAME: ${{ inputs.nickname }}
+          ONBOARD_PURPOSE: ${{ inputs.purpose == 'assignment' && 'A' || 'P' }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ONBOARD_USER_ID: ${{ secrets.ONBOARD_USER_ID }}
+        run: |
+          chmod +x onboard.sh
+          ./onboard.sh target-repo
+
+      - name: Verify the scaffold reached origin
+        env:
+          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          # claude-run.yml is a universal scaffold file (every shape gets it), so
+          # its presence on the default branch confirms the commit + push landed.
+          if gh api "repos/${TARGET_REPO}/contents/.github/workflows/claude-run.yml" --jq .name >/dev/null 2>&1; then
+            echo "claude-run.yml present on ${TARGET_REPO} — onboarding reached origin."
+          else
+            echo "claude-run.yml NOT found on ${TARGET_REPO}; the scaffold did not reach origin. See the onboard log above." >&2
+            exit 1
+          fi
