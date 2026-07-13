@@ -1162,8 +1162,9 @@ ${c_bold}Remaining manual steps:${c_rst}
      If WORKING_DIR is ".", also remove the now-redundant working-directory:
      lines from the workflow files (they read "working-directory: .").
 
-  2. Configure the Claude GitHub App for this repo:
-       https://github.com/apps/claude
+  2. Claude GitHub App — already covered by your all-repositories install, so
+     no action is needed here. (Only if you later narrow the App's scope would
+     you re-add this repo: https://github.com/apps/claude )
 
 EOF
 
@@ -1189,17 +1190,23 @@ else
   echo
 fi
 
+# Step 4: inject registry — the repo must be a row in Supabase inject_targets for
+# the Worker allowlist + the app workspace to reach it. Non-interactive (CI) runs
+# insert it automatically (result shown in the Registry line above); interactive
+# laptop runs don't, so point at the app's + Add target. (The old "edit
+# ALLOWED_TARGETS + npm run deploy" step is gone — the allowlist lives in Supabase
+# now, not a hardcoded array in the Worker.)
+if [ -n "$NONINTERACTIVE" ]; then
+  echo "  4. Inject registry — handled automatically in this run; see the Registry line above for the result."
+  echo
+else
+  echo "  4. Register this repo so the Worker + app can reach it — in the app:"
+  echo "       Inject settings -> + Add target   (repo: $REPO_GUESS, file: TODO.md)"
+  echo
+fi
+
 cat <<EOF
-  4. Add this repo to your GitHub PAT's access list (Contents:write, Actions:read+write):
-       https://github.com/settings/personal-access-tokens
-
-  5. Add to todo-injector-worker ALLOWED_TARGETS in src/index.js:
-       { repo: "$REPO_GUESS", filePath: "TODO.md", srcPrefix: "$SRC_DIR_VAL" }
-     Then: cd todo-injector-worker && npm run deploy
-     (Without this step, the repo won't appear in the chat's workspace pill —
-      the worker is the source of truth for which repos are reachable.)
-
-  6. Verify the manifest publishes after first deploy, then inject a test entry
+  5. Verify the manifest publishes after first deploy, then inject a test entry
      and confirm claude-run.yml picks it up.
 
 ${c_bold}Values that were filled in:${c_rst}
