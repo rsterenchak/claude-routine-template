@@ -149,10 +149,39 @@ function scanRegions(sources) {
   return regions;
 }
 
+// ── web mode: recursive JS/JSX/TS/TSX/CSS/HTML inventory, src-relative paths ──
+// Mirrors the csharp/sql/doc walkers below. Paths are emitted relative to
+// srcDir — NOT repo-root — because web mode publishes srcRoot separately and
+// the consumer joins the two. A flat src/ therefore yields exactly the bare
+// filenames it always did, so this is a no-op for single-level projects and
+// only adds depth where depth exists (Angular's src/app/**, a React repo with
+// src/components/**). Directories are filtered by name; everything else is
+// filtered by extension, so an assets/ dir of images costs one readdir and
+// contributes nothing.
+const WEB_SKIP_DIRS = { '.git': 1, node_modules: 1, dist: 1, build: 1, coverage: 1, '.vs': 1, '.idea': 1 };
+function walkWeb(start) {
+  const out = [];
+  (function rec(dir) {
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+    ents.forEach(function (e) {
+      if (e.isDirectory()) {
+        if (!WEB_SKIP_DIRS[e.name] && e.name.charAt(0) !== '.') rec(path.join(dir, e.name));
+      } else if (SCAN_RE.test(e.name)) {
+        // SCAN_RE is the superset of FILE_RE, so one walk feeds both the
+        // inventory and the region scan; they're split by filter below.
+        out.push(path.join(dir, e.name));
+      }
+    });
+  })(start);
+  return out;
+}
+
 function buildWebManifest() {
   let files = [], sources = [];
   try {
-    const names = fs.readdirSync(srcDir);
+    const rel = function (p) { return path.relative(srcDir, p).split(path.sep).join('/'); };
+    const names = walkWeb(srcDir).map(rel);
     files = names.filter(function (f) { return FILE_RE.test(f); }).sort();
     sources = names.filter(function (f) { return SCAN_RE.test(f); }).map(function (f) {
       return { name: f, isJs: isJsName(f), text: fs.readFileSync(path.join(srcDir, f), 'utf8') };
