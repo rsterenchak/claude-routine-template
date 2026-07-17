@@ -1,31 +1,5 @@
 name: Claude run
 
-# ─────────────────────────────────────────────────────────────────
-# TEMPLATE INSTANTIATION NOTES
-# This workflow is *mostly* generic — the actual routine logic lives in
-# .claude/routine-base.md (universal) and .claude/routine.md (project-specific),
-# both of which the agent reads at runtime. You should only need to adjust:
-#
-#   1. The CLAUDE_CODE_OAUTH_TOKEN secret must be configured for THIS repo:
-#      Settings → Secrets and variables → Actions → New repository secret
-#      Name: CLAUDE_CODE_OAUTH_TOKEN
-#      Value: your Claude Code OAuth token (Pro/Max subscription auth — see
-#             https://docs.claude.com/en/docs/claude-code for token setup).
-#      DO NOT use ANTHROPIC_API_KEY here — if both are set, the API key wins
-#      and you'll bill the API instead of using your plan quota.
-#
-#   2. The `--model` value below is currently `claude-opus-4-8`. Change ONLY
-#      if you have a specific reason (e.g. testing with a different model).
-#
-#   3. `show_full_output: true` is a TEMPORARY debug aid for first runs in a
-#      new repo — verify the agent's output is reasonable, then remove this
-#      line to reduce CI log noise. Once the routine is landing PRs cleanly
-#      and you're not actively debugging, set it to false or delete the line.
-#
-# Otherwise, leave this file alone. It's deliberately minimal so the routine
-# behavior lives in .md files where it's easier to evolve without touching CI.
-# ─────────────────────────────────────────────────────────────────
-
 # correlation_id is echoed here so the Worker can find this run by name
 # (workflow_dispatch does not return a run id to the caller).
 run-name: Claude run ${{ inputs.correlation_id }} · ${{ inputs.mode }}
@@ -60,7 +34,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -79,10 +53,9 @@ jobs:
           #   human to approve npm/git/gh commands. Safe here: ephemeral
           #   sandboxed runner, work lands via branch + PR, never on main
           #   directly, and the routine's own constraints bound behavior.
-          claude_args: "--max-turns 100 --model claude-opus-4-8 --dangerously-skip-permissions"
-          # TEMPORARY: surface the agent's full output for early verification
-          # in a new repo. Remove or set false once the routine is landing PRs
-          # cleanly and you're not actively debugging.
+          claude_args: "--max-turns 150 --model claude-opus-4-8 --dangerously-skip-permissions"
+          # Temporary: surface the agent's full output while we verify a real
+          # task run end-to-end. Remove once it's landing PRs cleanly.
           show_full_output: true
           prompt: |
             You are running an automated code-development routine for this repository.
@@ -94,3 +67,42 @@ jobs:
             repository, then execute the routine exactly as those files
             describe, for the run mode above. Complete exactly one task, then
             exit with the one-paragraph summary the routine specifies.
+
+      # Refresh the NEXT REFACTOR scan against the post-merge tree. The routine
+      # merges its own PR inside the step above, so main has already moved by the
+      # time this runs. The Worker does the sha check itself, so a run that did
+      # not touch the target file costs one directory listing and no tokens —
+      # only a run that actually changed it pays for a scan.
+      #
+      # Why CI and not the browser: a scan takes ~90s (Opus, high thinking
+      # effort, ~100k input tokens). The card used to hold that connection open
+      # from the client, which mobile Safari drops — losing the result and the
+      # tokens that produced it. A runner holds it without complaint.
+      #
+      # continue-on-error: the scan is a convenience. A stale card is not worth
+      # failing a run that already shipped its PR successfully.
+      - name: Refresh refactor scan
+        continue-on-error: true
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            echo "Injector not configured — skipping refactor scan."
+            exit 0
+          fi
+          # --max-time 180 gives the ~90s scan real headroom without hanging the
+          # job if the Worker never answers.
+          curl -sS --max-time 180 -X POST "$INJECTOR_URL" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"scan\":true,\"repo\":\"$REPO\"}" \
+            -o /tmp/scan.json || { echo "Scan request failed."; exit 0; }
+          jq -r '
+            if .unchanged then "Target file unchanged — no scan needed."
+            elif .all_under_budget then "Every file under budget — nothing to refactor."
+            elif .persisted then "Scan persisted: \(.target_file) — \(.candidates|length) candidates."
+            else "SCAN NOT PERSISTED: \(.persist_error // .error // "unknown")"
+            end
+          ' /tmp/scan.json || { echo "Could not read scan response:"; cat /tmp/scan.json; }
