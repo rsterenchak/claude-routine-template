@@ -815,6 +815,7 @@ GH_PAGES_DONE=false
 GH_PAGES_DEFERRED=false   # build-pipeline: Pages enabling fails until gh-pages exists
 GH_SECRET_DONE=false
 GH_SUPABASE_DONE=false
+GH_INJECTOR_DONE=false
 if [ "$USE_GH" = "true" ]; then
   REPO_FOR_GH="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "")"
   if [ -z "$REPO_FOR_GH" ] || [ "$REPO_FOR_GH" = "<owner>/<repo>" ]; then
@@ -924,6 +925,43 @@ if [ "$USE_GH" = "true" ]; then
         ;;
       *)
         echo "  ${c_dim}-> will need to add the Supabase secrets manually (see step below)${c_rst}"
+        ;;
+    esac
+
+    # 5. Injector secrets — required by claude-run.yml's post-merge refactor
+    # scan step. Same two values across ALL your repos (one Worker), so this is
+    # a paste of the same URL + secret each time. Optional: the run step guards
+    # on both being present and skips cleanly when they're absent, so a repo
+    # opts in by having them. Only a repo whose registry src_prefix points at a
+    # JS source tree can actually produce a scan — the Worker's analysis is
+    # JS-shaped. TODO_INJECTOR_URL isn't a credential, but it shouldn't be
+    # published from a public repo, so it's a secret rather than a literal in
+    # the workflow.
+    echo
+    ni_read inj_confirm "  Add TODO_INJECTOR_URL + TODO_INJECTOR_SECRET secrets now? [y/N] " "$([ -n "${TODO_INJECTOR_URL:-}" ] && [ -n "${TODO_INJECTOR_SECRET:-}" ] && echo y || echo n)"
+    case "$inj_confirm" in
+      [yY]|[yY][eE][sS])
+        ni_read inj_url "    TODO_INJECTOR_URL (https://<worker>.workers.dev): " "${TODO_INJECTOR_URL:-}"
+        echo -n "    TODO_INJECTOR_SECRET (input hidden, press Enter when done): "
+        ni_read_secret inj_secret "" "${TODO_INJECTOR_SECRET:-}"
+        echo
+        if [ -n "$inj_url" ] && [ -n "$inj_secret" ]; then
+          inj_ok=true
+          printf '%s' "$inj_url" | gh secret set TODO_INJECTOR_URL --repo "$REPO_FOR_GH" >/dev/null 2>&1 || inj_ok=false
+          printf '%s' "$inj_secret" | gh secret set TODO_INJECTOR_SECRET --repo "$REPO_FOR_GH" >/dev/null 2>&1 || inj_ok=false
+          if [ "$inj_ok" = "true" ]; then
+            echo "  ${c_grn}set${c_rst}    TODO_INJECTOR_URL + TODO_INJECTOR_SECRET secrets"
+            GH_INJECTOR_DONE=true
+          else
+            echo "  ${c_red}FAILED${c_rst} couldn't set injector secrets (add manually in Settings -> Secrets and variables -> Actions)"
+          fi
+          unset inj_secret
+        else
+          echo "  ${c_yel}skip${c_rst}   empty value, skipped"
+        fi
+        ;;
+      *)
+        echo "  ${c_dim}-> refactor scan will skip on this repo (see step below)${c_rst}"
         ;;
     esac
     echo
@@ -1187,6 +1225,19 @@ else
   echo "  3b. Add SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY secrets to this repo (needed for triage):"
   echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
   echo "       SUPABASE_URL = https://<ref>.supabase.co (no /rest/v1); key = the 'secret' Legacy API key"
+  echo
+fi
+
+# Step 3c: injector secrets — used by claude-run.yml's post-merge refactor scan
+# step. Optional: the step skips cleanly without them, and only a repo with a JS
+# source tree under its registry src_prefix can produce a scan at all.
+if [ "${GH_INJECTOR_DONE:-false}" = "true" ]; then
+  echo "  3c. ${c_grn}[DONE via gh CLI ✓]${c_rst} TODO_INJECTOR_URL + TODO_INJECTOR_SECRET secrets already set."
+  echo
+else
+  echo "  3c. ${c_dim}Optional:${c_rst} add TODO_INJECTOR_URL + TODO_INJECTOR_SECRET to enable the refactor scan:"
+  echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+  echo "       Only useful for a JS source tree; the run step skips cleanly without them."
   echo
 fi
 
