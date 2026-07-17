@@ -380,14 +380,20 @@ if [ "$IS_DOTNET" != "true" ]; then
   #                       (or a src/ dir). Gets manifest.yml + root-mode manifest.
   # Signals (file-based — the authoritative Pages setting isn't in the repo, so
   # this is a heuristic the user confirms):
-  #   build-pipeline: a real build script + a bundler config (vite/webpack/rollup)
+  #   build-pipeline: a real build script + a bundler config
+  #                   (vite/webpack/rollup, or angular.json — the Angular CLI
+  #                   wraps its bundler and exposes no vite/webpack config of
+  #                   its own, so angular.json is the equivalent signal). A repo
+  #                   with a build script but NO recognized config still lands
+  #                   here via the HAS_BUILD-only fallback below, flagged
+  #                   "verify" — that path catches Parcel, esbuild, Next, etc.
   #   served-from-source: no build script, OR html served at the repo root with
   #                       no bundler config.
   # ───────────────────────────────────────────────────────────────
   HAS_BUNDLER="false"
   if [ -n "$PKG" ]; then
     pkgdir="$(dirname "$PKG")"
-    for cfg in vite.config.js vite.config.ts webpack.config.js webpack.config.cjs rollup.config.js rollup.config.mjs; do
+    for cfg in vite.config.js vite.config.ts webpack.config.js webpack.config.cjs rollup.config.js rollup.config.mjs angular.json; do
       [ -f "$pkgdir/$cfg" ] && HAS_BUNDLER="true" && break
     done
   fi
