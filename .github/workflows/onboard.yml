@@ -19,6 +19,10 @@ name: Onboard a repo
 #   SUPABASE_URL                https://<ref>.supabase.co (no /rest/v1).
 #   SUPABASE_SERVICE_ROLE_KEY   legacy service_role JWT (PostgREST Bearer rejects sb_secret_*).
 #   ONBOARD_USER_ID             your Supabase auth user id (for the registry row).
+#   TODO_INJECTOR_URL           Worker URL, propagated to the target so claude-run.yml's
+#                               post-merge refactor scan step can reach it. Optional.
+#   TODO_INJECTOR_SECRET        Worker shared secret, propagated with the URL. Optional:
+#                               the scan step skips cleanly when either is absent.
 
 on:
   workflow_dispatch:
@@ -101,6 +105,11 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           ONBOARD_USER_ID: ${{ secrets.ONBOARD_USER_ID }}
+          # Propagated to the target repo so its claude-run.yml can call the
+          # Worker's scan route after a merge. Absent here = onboard.sh skips
+          # setting them = the target's scan step skips cleanly. Nothing breaks.
+          TODO_INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          TODO_INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
         run: |
           chmod +x onboard.sh
           ./onboard.sh target-repo
