@@ -599,7 +599,7 @@ esac
 # shape gets it, personal repos get none. Flows through the normal fetch +
 # skip-existing + commit machinery below; no {{placeholders}} to fill.
 if [ "$PURPOSE" = "assignment" ]; then
-  TEMPLATE_FILES+=( "assignment.md" ".claude/derive.md" ".github/workflows/claude-derive.yml" )
+  TEMPLATE_FILES+=( "assignment.md" ".claude/derive.md" ".github/workflows/claude-derive.yml" "commenting-style.md" )
 fi
 
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
@@ -702,6 +702,8 @@ if [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this
         print "## Assignment context";
         print "";
         print "This repo is coursework. The assignment spec, rubric, and constraints live in `assignment.md` at the repo root — read it when working here. Keep this file (CLAUDE.md) for build and code conventions.";
+        print "";
+        print "Code you write for this assignment MUST follow the commenting style in `commenting-style.md` at the repo root — read it before writing or editing any source file.";
         inblock = 1;
         next
       }
