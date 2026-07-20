@@ -592,6 +592,16 @@ case "$SHAPE" in
     ;;
 esac
 
+# Coursework repos also get a stub assignment.md at the repo root. It carries
+# the assignment spec / rubric / constraints (read by the agent and the PWA's
+# assignment card), keeping CLAUDE.md a pure conventions file. Purpose is
+# orthogonal to shape, so it's appended after the shape case — every assignment
+# shape gets it, personal repos get none. Flows through the normal fetch +
+# skip-existing + commit machinery below; no {{placeholders}} to fill.
+if [ "$PURPOSE" = "assignment" ]; then
+  TEMPLATE_FILES+=( "assignment.md" )
+fi
+
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
   # Entries may be "SRC>DEST" (fetch SRC from template, write as DEST in target).
@@ -653,32 +663,56 @@ echo
 fi   # end "$WRITE_FILES" guard around the fetch/write loop
 
 # ─────────────────────────────────────────────────────────────────
-# 4a. CLAUDE.md customization — strip ASSIGNMENT CONTEXT if personal
-# The CLAUDE.md template ships with an ASSIGNMENT CONTEXT block (sections
-# for spec, constraints, submission details). For personal projects, strip
-# that block — it's clutter the user doesn't need. For coursework, leave
-# it in for the user to fill in (the auto-loaded PROJECT CONTEXT then
-# carries the assignment spec to every chat turn).
-# Only runs when the file was actually written this run (not skipped as
-# already-existing) AND purpose is personal.
+# 4a. CLAUDE.md customization — resolve the ASSIGNMENT CONTEXT block per purpose.
+# The template's CLAUDE.md ships with an ASSIGNMENT CONTEXT block (start marker
+# through END marker). We never keep it as-is now: the assignment spec lives in
+# its own assignment.md, so CLAUDE.md stays a conventions file. Per purpose:
+#   personal   — strip the block entirely (clutter for a non-coursework repo).
+#   assignment — replace the block with a one-line pointer at assignment.md,
+#                where the spec / rubric / constraints actually live.
+# The grep for the template marker is the gate — it only matches the freshly
+# fetched template CLAUDE.md, so a user's pre-existing CLAUDE.md (skipped as
+# already-existing, marker absent) is never touched. Idempotent on re-onboard:
+# once transformed, the marker is gone and this is a no-op.
 # ─────────────────────────────────────────────────────────────────
 CLAUDE_MD_TARGET="$TARGET/CLAUDE.md"
-if [ "$PURPOSE" = "personal" ] && [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this is coursework" "$CLAUDE_MD_TARGET"; then
-  # Delete the block (start marker through END marker, inclusive).
-  # Temp-file pattern is portable across GNU and BSD sed.
-  sed '/ASSIGNMENT CONTEXT — fill in if this is coursework/,/END ASSIGNMENT CONTEXT/d' \
-      "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
-      && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
-  # Cleanup: deletion may have left two consecutive '---' separators where
-  # the block was bordered by them. Collapse to one.
-  awk 'BEGIN{prev_sep=0}
-       /^---$/ { if (prev_sep) next; prev_sep=1; print; next }
-       /^$/ { print; next }
-       { prev_sep=0; print }' \
-      "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
-      && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
-  echo "  ${c_dim}stripped ASSIGNMENT CONTEXT block from CLAUDE.md (personal project)${c_rst}"
-  echo
+if [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this is coursework" "$CLAUDE_MD_TARGET"; then
+  if [ "$PURPOSE" = "personal" ]; then
+    # Delete the block (start marker through END marker, inclusive).
+    # Temp-file pattern is portable across GNU and BSD sed.
+    sed '/ASSIGNMENT CONTEXT — fill in if this is coursework/,/END ASSIGNMENT CONTEXT/d' \
+        "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
+        && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
+    # Cleanup: deletion may have left two consecutive '---' separators where
+    # the block was bordered by them. Collapse to one.
+    awk 'BEGIN{prev_sep=0}
+         /^---$/ { if (prev_sep) next; prev_sep=1; print; next }
+         /^$/ { print; next }
+         { prev_sep=0; print }' \
+        "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
+        && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
+    echo "  ${c_dim}stripped ASSIGNMENT CONTEXT block from CLAUDE.md (personal project)${c_rst}"
+    echo
+  else
+    # Assignment: replace the block (start marker through END marker, inclusive)
+    # with a short pointer at assignment.md. The '---' separators bordering the
+    # block stay, so the pointer reads as its own clean section.
+    awk '
+      /ASSIGNMENT CONTEXT — fill in if this is coursework/ {
+        print "## Assignment context";
+        print "";
+        print "This repo is coursework. The assignment spec, rubric, and constraints live in `assignment.md` at the repo root — read it when working here. Keep this file (CLAUDE.md) for build and code conventions.";
+        inblock = 1;
+        next
+      }
+      /END ASSIGNMENT CONTEXT/ { inblock = 0; next }
+      inblock { next }
+      { print }
+    ' "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
+        && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
+    echo "  ${c_dim}pointed CLAUDE.md at assignment.md (assignment project)${c_rst}"
+    echo
+  fi
 fi
 
 REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "<owner>/<repo>")"
