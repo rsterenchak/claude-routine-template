@@ -599,7 +599,7 @@ esac
 # shape gets it, personal repos get none. Flows through the normal fetch +
 # skip-existing + commit machinery below; no {{placeholders}} to fill.
 if [ "$PURPOSE" = "assignment" ]; then
-  TEMPLATE_FILES+=( "assignment.md" )
+  TEMPLATE_FILES+=( "assignment.md" ".claude/derive.md" ".github/workflows/claude-derive.yml" )
 fi
 
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
@@ -806,6 +806,7 @@ PLACEHOLDER_FILES=(
   "CLAUDE.md"
   ".claude/routine.md"
   ".claude/triage.md"
+  ".claude/derive.md"
   ".github/workflows/test.yml"
 )
 # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
