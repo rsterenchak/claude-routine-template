@@ -1,0 +1,76 @@
+name: Claude derive
+
+# correlation_id is echoed into run-name so the app/Worker can find this run by
+# name (workflow_dispatch returns no run id — same trick as claude-run.yml).
+# project_id scopes the derive to one project's assignment: the agent is
+# per-project, and this run reads that project's assignment.md and writes its
+# proposals.
+run-name: Claude derive ${{ inputs.correlation_id }} · ${{ inputs.project_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      project_id:
+        description: project id whose assignment.md to derive tasks from
+        type: string
+        required: true
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+
+permissions:
+  contents: read      # derive only READS source + assignment.md — it never opens PRs or writes the repo
+  id-token: write     # required: the action authenticates via OIDC
+
+concurrency:
+  # one derive at a time; a second dispatch queues rather than overlapping (two
+  # concurrent derives could double-write proposals for the same aspect).
+  group: claude-derive
+  cancel-in-progress: false
+
+jobs:
+  derive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        # shallow is enough — derive reads current source + assignment.md, no history needed
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          # Supabase REST access for reading the existing queue + writing proposal
+          # rows. Service role bypasses RLS (trusted backend job, no user session);
+          # the routine scopes every query by project_id itself. Same two secrets
+          # as triage — already present on an onboarded repo.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROJECT_ID: ${{ inputs.project_id }}
+        with:
+          # Subscription auth (Pro/Max) — the SAME plan-billed path as
+          # claude-run.yml / claude-triage.yml, NOT anthropic_api_key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Opus for derive, NOT Sonnet. Unlike triage (a frequent per-change
+          # sweep where Sonnet's economy matters), derive runs at most a handful
+          # of times per assignment, and its whole value is proposal quality —
+          # mapping requirements to rubric aspects and judging ambiguity is
+          # exactly where the stronger model earns its keep. The cost is
+          # negligible at this cadence. --dangerously-skip-permissions: no human
+          # to approve the routine's curls; safe here — the runner is ephemeral
+          # and contents:read means it cannot push even if it tried.
+          claude_args: "--max-turns 80 --model claude-opus-4-8 --dangerously-skip-permissions"
+          # Temporary: surface the agent's full output while verifying end-to-end
+          # (also how the Worker's run_result reads the closing summary).
+          show_full_output: true
+          prompt: |
+            You are running the autonomous-agent DERIVE pass for this repository.
+            Project id: ${{ inputs.project_id }}
+
+            Read `.claude/derive.md` from the repository and execute it exactly as
+            written, for the project id above. It defines how to read this repo's
+            `assignment.md`, enumerate the rubric's aspects, check which are
+            already covered, and write a proposal (or a clarifying question) row
+            back to Supabase for each uncovered aspect. Complete the whole pass,
+            then exit with the one-paragraph summary the routine specifies.
