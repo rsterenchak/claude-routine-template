@@ -12,13 +12,11 @@ Every source file opens with a block-comment header containing, in order:
 - A prose paragraph describing what the program does and how the user interacts
   with it — a few sentences, not a one-liner.
 - A blank line.
-- Three lines: the author (`Robert Sterenchak`), the course and assignment
-  (`<COURSE> - Assignment <N>`), and the date.
+- Two lines: the author (`Robert Sterenchak`) and the date.
 
-Infer the course and assignment number from the assignment context (the scenario
-in `assignment.md`, or the repo name); use the current date. Use whatever header
-comment form is idiomatic for the language — a `/* */` block in C/C++/C#/Java, a
-module docstring in Python — but keep all four pieces.
+Use whatever header comment form is idiomatic for the language — a `/* */` block
+in C/C++/C#/Java, a module docstring in Python — but keep all three pieces. Do
+not add a course name, assignment number, or any field not listed above.
 
 ## Comment every function / method
 
@@ -61,7 +59,6 @@ line, not brevity.
  * redirects from a file, printing each letter's count once the user signals EOF.
  *
  * Robert Sterenchak
- * ICS212 - Assignment 11
  * October 14, 2019
  */
 #include <stdio.h>
