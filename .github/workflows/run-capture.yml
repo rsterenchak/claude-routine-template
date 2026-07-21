@@ -1,0 +1,139 @@
+name: Run & capture
+
+# On-demand "run it now" for a .NET console app. Dispatched by the Worker's
+# capture route (with a correlation_id it also pre-inserted a run_outputs row
+# for), OR run by hand from the Actions tab. Runs the app, captures its
+# stdout / stderr / exit code, and POSTs the result back to the Worker, which
+# updates the matching run_outputs row (by correlation_id) for the PWA to poll.
+#
+# The runnable project is AUTO-DISCOVERED (the non-test .csproj), so this file
+# is repo-agnostic — no hardcoded project name. The optional `project` input
+# overrides discovery for a repo with more than one runnable app.
+#
+# correlation_id is echoed into run-name so the Worker can find this run by name
+# (workflow_dispatch returns no run id) — same trick as claude-run.yml.
+
+run-name: Run & capture ${{ inputs.correlation_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: opaque id echoed into run-name + sent back with the output
+        type: string
+        required: true
+      args:
+        description: optional args passed to the app (space-separated); blank runs with none
+        type: string
+        required: false
+      project:
+        description: optional .csproj or folder to run; blank auto-discovers the non-test project
+        type: string
+        required: false
+
+permissions:
+  contents: read      # only runs the app — never writes the repo
+
+concurrency:
+  group: run-capture-${{ inputs.correlation_id }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '{{DOTNET_VERSION}}'
+
+      # Resolve the project, then run it capturing stdout/stderr/exit separately.
+      # A nonzero exit (bad input, build error, ambiguous project) is captured as
+      # a RESULT, not a job failure — the row is the outcome, so the job stays
+      # green and the failure shows up as exit_code + stderr on the row (same as
+      # a normal nonzero app exit). `--verbosity quiet` keeps dotnet build
+      # chatter out of the captured program output. ARGS/PROJECT come via env,
+      # not string-interpolation, to avoid injection; ARGS is unquoted (with glob
+      # off) so multiple args word-split into separate argv the app parses.
+      - name: Run the app and capture output
+        id: run
+        env:
+          ARGS: ${{ inputs.args }}
+          PROJECT_INPUT: ${{ inputs.project }}
+        run: |
+          set +e
+          set -f
+          : > /tmp/stdout.txt; : > /tmp/stderr.txt
+
+          PROJECT=""
+          if [ -n "$PROJECT_INPUT" ]; then
+            PROJECT="$PROJECT_INPUT"
+          else
+            # Auto-discover: every .csproj that is NOT a test project (invert the
+            # same Microsoft.NET.Test.Sdk grep test.yml uses to find tests).
+            NONTEST=()
+            while IFS= read -r p; do
+              grep -qi 'Microsoft.NET.Test.Sdk' "$p" || NONTEST+=("$p")
+            done < <(find . -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' | sort)
+            if [ "${#NONTEST[@]}" -eq 1 ]; then
+              PROJECT="${NONTEST[0]}"
+            elif [ "${#NONTEST[@]}" -gt 1 ]; then
+              # Several runnable candidates — narrow to executables (OutputType Exe).
+              EXE=()
+              for p in "${NONTEST[@]}"; do
+                grep -qiE '<OutputType>[[:space:]]*Exe' "$p" && EXE+=("$p")
+              done
+              [ "${#EXE[@]}" -eq 1 ] && PROJECT="${EXE[0]}"
+            fi
+          fi
+
+          if [ -z "$PROJECT" ]; then
+            echo "Could not auto-select a single runnable project. Set the 'project' input to the .csproj (or its folder) to run." | tee -a /tmp/stderr.txt
+            echo "project=" >> "$GITHUB_OUTPUT"
+            echo "exit_code=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "Running project: $PROJECT"
+            echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+            dotnet run --project "$PROJECT" --configuration Release --verbosity quiet -- $ARGS \
+              > /tmp/stdout.txt 2> /tmp/stderr.txt
+            echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          fi
+          echo "----- stdout -----"; cat /tmp/stdout.txt
+          echo "----- stderr -----"; cat /tmp/stderr.txt
+
+      # Always report — even on failure/skip — so a row never strands in 'running'.
+      - name: Report result to the Worker
+        if: always()
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          REPO: ${{ github.repository }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          ARGS: ${{ inputs.args }}
+          PROJECT: ${{ steps.run.outputs.project }}
+          RUN_EXIT: ${{ steps.run.outputs.exit_code }}
+        run: |
+          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            echo "TODO_INJECTOR_URL / TODO_INJECTOR_SECRET not set — capture ran (see output above) but can't report to the Worker."
+            exit 0
+          fi
+          [ -f /tmp/stdout.txt ] || : > /tmp/stdout.txt
+          [ -f /tmp/stderr.txt ] || : > /tmp/stderr.txt
+          EXIT="${RUN_EXIT:-1}"
+          jq -n \
+            --arg repo "$REPO" \
+            --arg cid "$CORRELATION_ID" \
+            --arg cmd "dotnet run --project ${PROJECT:-<none>} -- $ARGS" \
+            --argjson exit "$EXIT" \
+            --rawfile stdout /tmp/stdout.txt \
+            --rawfile stderr /tmp/stderr.txt \
+            '{capture_result:true, repo:$repo, correlation_id:$cid, command:$cmd, exit_code:$exit, stdout:$stdout, stderr:$stderr}' \
+            > /tmp/payload.json
+          echo "Reporting capture $CORRELATION_ID (project ${PROJECT:-<none>}, exit $EXIT)…"
+          curl -sS --max-time 30 -X POST "$INJECTOR_URL" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" \
+            -H "Content-Type: application/json" \
+            --data @/tmp/payload.json && echo "  reported."
