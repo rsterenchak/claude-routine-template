@@ -54,7 +54,7 @@ The detection always shows its reasoning and always asks for confirmation, becau
 - Detect ESM vs CommonJS and keep the right `gen-src-manifest` variant (`.cjs` for ESM, `.js` for CommonJS).
 - Create routine files that don't already exist in the target.
 - Prompt for project name / description / stack (with detected defaults) and **auto-fill all `{{PLACEHOLDER}}` values** — working dir, source dir, test/build/install commands, manifest variant, etc. — across CLAUDE.md, routine.md, and the shape's workflow.
-- Guess your repo's `owner/name` from its git remote for the worker `ALLOWED_TARGETS` line.
+- Guess your repo's `owner/name` from its git remote to register it as an inject target (auto-inserted when onboarding through CI; via the app otherwise).
 
 **It won't:**
 - Overwrite any existing file. If the target already has a `CLAUDE.md`, a workflow, or `.claude/routine.md`, it's reported as `skip` and left untouched — and its placeholders are NOT filled (the script never edits a file it didn't create). Merge those by hand.
@@ -95,7 +95,7 @@ Follow the printed checklist. The script gets you the files, the shape-appropria
 1. Complete the freeform sections (CLAUDE.md "Key files", routine.md conventions).
 2. Configure the GitHub App, secrets, and PAT (README Steps 5-7).
 3. Flip the two repo settings: read-write workflow permissions, and Pages source for your shape (README Step 9).
-4. Add the repo to the worker's `ALLOWED_TARGETS` and deploy the worker (README Step 8).
+4. Register the repo as an inject target — in the app, Inject settings → + Add target (README Step 8).
 5. Verify the manifest publishes and inject a test entry (README Steps 10-11).
 
 The README's "What to do after creating a repo from this template" section is the full checklist — the steps are identical whether you came via the template button or this script. The one difference: this script auto-fills the placeholders and picks the workflow for your shape, so you skip the manual variant-selection and placeholder-filling steps.

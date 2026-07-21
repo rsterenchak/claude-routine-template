@@ -33,11 +33,7 @@ You just instantiated this repo from the `claude-routine-template`. Before this 
 **External setup:**
 - [ ] Configure the Claude GitHub App to access this repo: https://github.com/apps/claude
 - [ ] Add this repo to your GitHub PAT's access list: https://github.com/settings/personal-access-tokens
-- [ ] Add a target to the `todo-injector-worker` repo's `ALLOWED_TARGETS` in `src/index.js`:
-  ```
-  { repo: "<owner>/<repo>", filePath: "TODO.md", srcPrefix: "{{SRC_DIR}}" },
-  ```
-- [ ] Deploy the worker: `cd todo-injector-worker && npm run deploy`.
+- [ ] Register this repo as an inject target so the Worker and PWA can reach it. In the PWA: **Inject settings → + Add target** — repo `<owner>/<repo>`, file `TODO.md`, src prefix `{{SRC_DIR}}`. This writes a row to the Supabase `inject_targets` table, which the Worker's `resolveTarget` reads live — no code edit, no Worker redeploy. (Onboarding through CI/`onboard.yml` inserts this row for you.)
 - [ ] In the PWA's chat surface, switch the workspace pill to this repo and verify the file manifest loads (the picker should list files from `{{SRC_DIR}}`).
 - [ ] Inject a small test entry (e.g. `- [ ] **[LOW]** Add a console.log to verify routine integration` — a trivial change you can revert). Verify `claude-run.yml` picks it up, opens a PR, and auto-merges. Once verified, you're integrated.
 
@@ -126,18 +122,14 @@ This repo is wired into a broader automation pipeline. Understanding the pipelin
 
 ---
 
-## Repos and allowlist
+## Repos and the inject registry
 
-The set of repos this routine can act on is configured in `todo-injector-worker/src/index.js` as `ALLOWED_TARGETS`. Each entry looks like:
-```
-{ repo: "owner/name", filePath: "TODO.md", srcPrefix: "src/" }
-```
+The set of repos this routine can act on lives in the Supabase `inject_targets` table, not in the Worker's code. Each row carries `repo`, `file_path` (`TODO.md`), `src_prefix`, `shape`, and `enabled`; the Worker's `resolveTarget` reads the table live, so adding a repo needs no Worker redeploy.
 
 **Recipe for adding a new repo:**
-1. Add the entry to `ALLOWED_TARGETS` in the worker. Choose `srcPrefix` based on where source files live (e.g. `src/` for root-level, `subdir/src/` for nested).
+1. Add an `inject_targets` row — in the PWA via **Inject settings → + Add target**. Choose `src_prefix` by where source lives: `src/` for root-level, `subdir/src/` for nested, `""` for files at the repo root. (Onboarding through CI inserts this row for you.)
 2. Ensure the GitHub PAT used by the worker has `Contents:write` and `Actions:read+write` scope on the new repo.
-3. Add `scripts/gen-src-manifest.js` (or `.cjs` for ESM repos) to the new repo, plus a deploy.yml step that runs it.
-4. Deploy the worker: `npm run deploy` from `todo-injector-worker`.
+3. Add `scripts/gen-src-manifest.js` (or `.cjs` for ESM repos) to the new repo, plus the workflow step that runs it.
 
 **Note on `.cjs` vs `.js`:** Use `.cjs` when the repo's `package.json` has `"type": "module"`. Otherwise use `.js`.
 

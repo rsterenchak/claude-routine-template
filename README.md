@@ -158,15 +158,15 @@ Visit https://github.com/apps/claude and grant it access. It needs to read/write
 
 Add this repo to the PAT the `todo-injector-worker` uses (https://github.com/settings/personal-access-tokens). Required scopes: `Contents:write` and `Actions:read+write`.
 
-### Step 8 — Add this repo to the worker's `ALLOWED_TARGETS`
+### Step 8 — Register this repo as an inject target
 
-In `todo-injector-worker/src/index.js`:
+Add an `inject_targets` row so the worker and the PWA can reach this repo. In the PWA, **Inject settings → + Add target**:
 
-```js
-{ repo: "<your-username>/<your-repo>", filePath: "TODO.md", srcPrefix: "<src dir>/" }
-```
+- **repo** — `<your-username>/<your-repo>`
+- **file** — `TODO.md`
+- **src prefix** — the path from repo root to where source lives. For a **web** repo it's usually `src/`; for **.NET** it's the project subfolder (blank if the `.csproj` is at root); for a **SQL** repo whose `.sql` sit at the root it's `""`. It must match the `MANIFEST_SRC_ROOT` you filled in Step 4, since the worker prepends it to the manifest's paths to build raw URLs.
 
-`srcPrefix` is the path from repo root to where source lives. For a **web** repo it's usually `src/`; for **.NET** it's the project subfolder (blank if the `.csproj` is at root); for a **SQL** repo whose `.sql` sit at the root it's `""`. It must match the `MANIFEST_SRC_ROOT` you filled in Step 4, since the worker prepends it to the manifest's paths to build raw URLs. Then deploy: `cd todo-injector-worker && npm run deploy`. The workspace pill in the PWA sources its repo list from the worker, so the repo appears once this deploys.
+The worker reads `inject_targets` live (via its `resolveTarget`), so there's nothing to deploy — the repo appears in the PWA's workspace pill as soon as the row exists. Onboarding through CI/`onboard.yml` inserts this row automatically.
 
 ### Step 9 — Configure the two repo settings the template can't set
 
@@ -238,7 +238,7 @@ The manifest isn't published/reachable. Check the manifest URL returns JSON (Ste
 Pages is serving but the manifest isn't at that path — usually a build-output-dir mismatch. Align the three: generator output dir, build output dir, publish dir.
 
 **Files attach but Claude says "file not found."**
-The worker's `srcPrefix` is wrong. The manifest lists paths relative to `MANIFEST_SRC_ROOT`; the worker prepends `srcPrefix` to build the raw URL. Confirm the `ALLOWED_TARGETS` `srcPrefix` matches where source actually lives (and the `MANIFEST_SRC_ROOT` you set).
+The worker's `src_prefix` is wrong. The manifest lists paths relative to `MANIFEST_SRC_ROOT`; the worker prepends `src_prefix` to build the raw URL. Confirm the inject target's `src_prefix` (Inject settings → this repo's row) matches where source actually lives (and the `MANIFEST_SRC_ROOT` you set).
 
 **`claude-run.yml` fails with an authentication error.**
 `CLAUDE_CODE_OAUTH_TOKEN` is missing or expired. Re-add it. (Step 6.)
