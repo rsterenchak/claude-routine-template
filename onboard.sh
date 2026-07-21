@@ -91,6 +91,12 @@ NODE_FILES=(
 BUILD_PIPELINE_FILES=( ".github/workflows/deploy.yml" )
 SERVED_FROM_SOURCE_FILES=( ".github/workflows/manifest.yml" )
 CONSOLE_FILES=( ".github/workflows/test-dotnet.yml>.github/workflows/test.yml" )
+# Capture workflow — CONSOLE ONLY. run-capture.yml does `dotnet run` on the
+# auto-discovered app and reports its stdout/stderr/exit back to the Worker.
+# A desktop (WinForms/WPF) app's `dotnet run` launches a GUI that hangs
+# headless in CI, and maui is a mobile build with no runnable head — so this
+# is deliberately NOT added to DESKTOP_FILES or MAUI_FILES.
+CAPTURE_FILES=( ".github/workflows/run-capture.yml" )
 DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
 MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
 # .NET manifest publishing — the (CommonJS) scanner + a publish workflow that
@@ -576,7 +582,7 @@ case "$SHAPE" in
     TEMPLATE_FILES+=( "${NODE_FILES[@]}" "${SERVED_FROM_SOURCE_FILES[@]}" )
     ;;
   console)
-    TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
+    TEMPLATE_FILES+=( "${CONSOLE_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" "${CAPTURE_FILES[@]}" )
     ;;
   desktop)
     TEMPLATE_FILES+=( "${DESKTOP_FILES[@]}" "${DOTNET_MANIFEST_FILES[@]}" )
@@ -816,7 +822,7 @@ PLACEHOLDER_FILES=(
 case "$SHAPE" in
   build-pipeline)     PLACEHOLDER_FILES+=( ".github/workflows/deploy.yml" ) ;;
   served-from-source) PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
-  console)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
+  console)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ".github/workflows/run-capture.yml" ) ;;
   desktop)            PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   maui)               PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
   sql)                PLACEHOLDER_FILES+=( ".github/workflows/manifest.yml" ) ;;
@@ -1278,9 +1284,16 @@ if [ "${GH_INJECTOR_DONE:-false}" = "true" ]; then
   echo "  3c. ${c_grn}[DONE via gh CLI ✓]${c_rst} TODO_INJECTOR_URL + TODO_INJECTOR_SECRET secrets already set."
   echo
 else
-  echo "  3c. ${c_dim}Optional:${c_rst} add TODO_INJECTOR_URL + TODO_INJECTOR_SECRET to enable the refactor scan:"
-  echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
-  echo "       Only useful for a JS source tree; the run step skips cleanly without them."
+  if [ "$SHAPE" = "console" ]; then
+    echo "  3c. ${c_yel}Needed for capture:${c_rst} add TODO_INJECTOR_URL + TODO_INJECTOR_SECRET secrets:"
+    echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+    echo "       run-capture.yml reports program output back through the Worker with these;"
+    echo "       without them a captured run strands at 'running' and never settles."
+  else
+    echo "  3c. ${c_dim}Optional:${c_rst} add TODO_INJECTOR_URL + TODO_INJECTOR_SECRET to enable the refactor scan:"
+    echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+    echo "       Only useful for a JS source tree; the run step skips cleanly without them."
+  fi
   echo
 fi
 
