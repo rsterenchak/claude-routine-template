@@ -102,7 +102,7 @@ The test suite is run via the test command from the working directory, both defi
 
 After every meaningful change during implementation:
 
-1. From the working directory, run the test command. If the command fails with a "command not found" or module resolution error rather than a test failure, run the install command first and retry — this means the environment hasn't hydrated dependencies yet.
+1. From the working directory, run the test command IN THE FOREGROUND and wait for it to finish before doing anything else. Do NOT launch it as a background task, and do NOT yield your turn while it runs (see <hard_constraints>). If the command fails with a "command not found" or module resolution error rather than a test failure, run the install command first and retry — this means the environment hasn't hydrated dependencies yet.
 2. If all tests pass, proceed.
 3. If any test fails, read the failure output and decide which of these applies:
    a. **Implementation bug.** Your change introduced behavior the tests correctly reject. Fix the implementation and re-run. This is the common case.
@@ -131,7 +131,7 @@ After every meaningful change during implementation:
    c. If the merge is clean (no conflicts), proceed to step 4d. If it reports conflicts:
       - Attempt to resolve ONLY trivial, mechanical conflicts where the resolution is unambiguous — most commonly the project bookkeeping file (e.g. a changelog where both sides prepended an entry at the top of the same list; keep both entries, base's first, then re-apply this run's bookkeeping rules including any cap/prune so the result still obeys the project rules). Do NOT attempt to resolve conflicts in source/logic files where the correct merge requires judgment about behavior.
       - If a conflict is anything other than such a trivial bookkeeping/ordering conflict, abort cleanly exactly as <test_verification> step 5 prescribes: `git merge --abort`, then `git reset --hard origin/<BASE_BRANCH>` and `git clean -fd`, leave the task unchecked, and report: "Merge conflict with <BASE_BRANCH> requires human resolution" naming the conflicting files. A clean main beats a guessed merge. Do not loop trying to resolve it.
-   d. After a clean or trivially-resolved merge, re-run the test command from the working directory one final time. The branch now contains main's latest changes merged with yours, so this confirms the combined result is green — not just your changes in isolation. If this final run fails, abort per <test_verification> step 5 (reset, leave unchecked, report). Do not push a branch whose merged state is untested.
+   d. After a clean or trivially-resolved merge, re-run the test command from the working directory one final time, IN THE FOREGROUND, blocking until it completes. The branch now contains main's latest changes merged with yours, so this confirms the combined result is green — not just your changes in isolation. If this final run fails, abort per <test_verification> step 5 (reset, leave unchecked, report). Do not push a branch whose merged state is untested, and do not end your turn between pushing and opening the PR.
    e. Push the branch to `origin`.
 
 5. Open a PR against <BASE_BRANCH>:
@@ -152,6 +152,7 @@ After every meaningful change during implementation:
 </git_workflow>
 
 <hard_constraints>
+- NEVER end your turn with work outstanding. This routine runs as a GitHub Actions job that terminates the moment your turn ends, so a scheduled wakeup can never fire — no process remains to wake. Do not call ScheduleWakeup, do not end a turn saying you will wait for a notification or a background task, and do not yield while anything you started is still pending. If you started it, block on it and finish the run in the same turn. Two runs have been lost to this: both implemented the task correctly, committed, and pushed a branch, then yielded waiting on a backgrounded test suite and were terminated before opening the PR — leaving an orphaned branch, an unchecked task, and a run that looked like a failure but was not.
 - Exactly ONE task per run.
 - Never pick up a task whose `Type:` line is missing, malformed, or contains anything other than `bug` or `feature`. Such tasks are reported and skipped, not guessed at.
 - Never commit to <BASE_BRANCH> directly — always go through the per-task branch + PR + auto-merge flow, even though the end result lands on <BASE_BRANCH>.
