@@ -1,0 +1,70 @@
+name: Claude scan
+# correlation_id is echoed into run-name so the app can find this run by name
+# (workflow_dispatch returns no run id to the caller — same trick as
+# claude-run.yml). The app polls active_runs with workflow: "scan" to track it.
+run-name: Claude scan ${{ inputs.correlation_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+permissions:
+  # The scan reads the repo tree through the Worker (which uses its own PAT),
+  # not through this runner — so the job needs nothing beyond the default.
+  contents: read
+concurrency:
+  # one scan at a time per repo; a second dispatch queues rather than overlapping
+  group: claude-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # The scan itself is ~90s; 10 minutes is generous headroom for a queued
+    # runner without letting a hung request hold a slot indefinitely.
+    timeout-minutes: 10
+    steps:
+      # No checkout: this job exists solely to hold a connection. The scan is the
+      # Worker's own `scan` route, which awaits an Anthropic call (~90s, Sonnet at
+      # high effort over ~100k input tokens) and persists the refactor_scans row
+      # before returning. A browser cannot hold that open — mobile Safari drops it
+      # and the result is lost along with the tokens that produced it — so a
+      # runner makes the call instead.
+      #
+      # Deliberately NOT gated on REFACTOR_SCAN_ENABLED. That repository variable
+      # governs the AUTOMATIC post-merge scan in claude-run.yml, which fires
+      # whether or not anyone wanted it. This workflow only ever runs because
+      # someone asked for it, and the asking is the consent. Do not "fix" the
+      # inconsistency by adding the gate here — it would make the on-demand
+      # control silently do nothing.
+      #
+      # Fails LOUDLY, unlike claude-run.yml's step (which carries
+      # continue-on-error because a stale card is not worth failing a shipped
+      # PR). Here the scan IS the job: if it did not happen, the run should be
+      # red so the request is visibly unfulfilled rather than quietly dropped.
+      - name: Run refactor scan
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            echo "Injector not configured (TODO_INJECTOR_URL / TODO_INJECTOR_SECRET) — cannot scan."
+            exit 1
+          fi
+          # --max-time 180 gives the ~90s scan real headroom without hanging the
+          # job if the Worker never answers.
+          curl -sS --max-time 180 -X POST "$INJECTOR_URL" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "{\"scan\":true,\"repo\":\"$REPO\"}" \
+            -o /tmp/scan.json || { echo "Scan request failed."; exit 1; }
+          jq -r '
+            if .unchanged then "Target file unchanged since the last scan — nothing new to find."
+            elif .no_eligible_files then "No scannable source files (extensions: \(.extensions|join(", ")); \(.files_seen) files seen)."
+            elif .all_under_budget then "Every file under budget — largest is \(.largest_file) at \(.largest_bytes) of \(.budget_bytes) bytes."
+            elif .persisted then "Scan persisted: \(.target_file) — \(.candidates|length) candidates."
+            else "SCAN NOT PERSISTED: \(.persist_error // .error // "unknown")"
+            end
+          ' /tmp/scan.json || { echo "Could not read scan response:"; cat /tmp/scan.json; exit 1; }
