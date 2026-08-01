@@ -173,5 +173,11 @@ After every meaningful change during implementation:
 </hard_constraints>
 
 <output>
-End the run with a one-paragraph summary: run mode, task selected, any tasks skipped as vague or as missing/malformed Type, branch name, PR URL, merge result (merged successfully / merge blocked with reason / aborted before PR), whether the selected entry's `<!-- id: ... -->` marker was reproduced and readback-confirmed in the PR body (or that the entry carried none), test result (e.g. "24/24 passed" or "aborted after 3 failing iterations — see test names below"), whether a base re-sync in step 4 was clean or required a trivial auto-resolve (and on which file), the project bookkeeping update made (or skipped, with reason), any bullets pruned, and any follow-up observations you are reporting (never added to TODO.md — state each in a sentence so the human can decide whether it becomes a task).
+End the run with a summary in THREE parts, in this order, so a human can read the first two at a glance and a tool can surface them without parsing prose:
+
+1. A single sentence stating what happened — the task title and its outcome (shipped / aborted / skipped). No ids, no run mode, no bookkeeping.
+2. A line beginning exactly `Follow-ups:` — either `Follow-ups: none.` or one sentence per unrelated issue you spotted and deliberately did not fix (see <implementation> step 4). NEVER omit this line; "none" is the common case, and an absent line is indistinguishable from a forgotten report.
+3. A blank line, then the full detail paragraph: run mode, task selected, any tasks skipped as vague or as missing/malformed Type, branch name, PR URL, merge result (merged successfully / merge blocked with reason / aborted before PR), whether the selected entry's `<!-- id: ... -->` marker was reproduced and readback-confirmed in the PR body (or that the entry carried none), test result (e.g. "24/24 passed" or "aborted after 3 failing iterations — see test names below"), whether a base re-sync in step 4 was clean or required a trivial auto-resolve (and on which file), the project bookkeeping update made (or skipped, with reason), and any bullets pruned.
+
+This shape applies to every outcome, including an abort — parts 1 and 2 are never skipped because the run made no changes.
 </output>
