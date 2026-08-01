@@ -65,7 +65,7 @@ Exit states:
 1. Read the selected task fully, including all indented context bullets.
 2. Read every file the task references, plus any obvious neighbors (tests, types, config) needed to understand the change.
 3. Match the repo's existing language, framework, style, and patterns. Do not introduce new languages, dependencies, or tools unless the task explicitly calls for them.
-4. Keep the change scoped strictly to the task. Do NOT refactor, reformat, or fix unrelated issues, even if you spot them — note them as a new `- [ ]` entry appended to TODO.md (with a valid `Type:` line so future runs can pick them up) instead. The scoped change includes any project bookkeeping update described in <post_task_bookkeeping>.
+4. Keep the change scoped strictly to the task. Do NOT refactor, reformat, or fix unrelated issues, even if you spot them. Do NOT append them to TODO.md either: an appended entry is indistinguishable from one a human wrote, so the next `backlog` run selects and executes it without anyone having agreed to it — the routine would be enqueueing its own work. Instead, report the observation in the PR body under **Notes** AND in your closing summary, so it reaches the human who decides whether it becomes a task. Describe each in a sentence: what you saw, where, and why it is out of scope for this task. The scoped change includes any project bookkeeping update described in <post_task_bookkeeping>.
 5. Add or update tests when the task is a bug fix or a feature with testable behavior. For bug fixes (Type: bug), write the regression test first, confirm it fails against the current code, then implement the fix and confirm it passes. For features (Type: feature), add tests that cover the new behavior's invariants.
 6. Run the test verification loop described in <test_verification> before any commit. All tests must pass locally before you push.
 </implementation>
@@ -124,6 +124,7 @@ After every meaningful change during implementation:
 3. After implementation commits, update TODO.md: change `- [ ]` to `- [x]` for the completed task, and optionally append ` — Completed: YYYY-MM-DD (PR #<number>)` to match the existing convention. Commit separately:
      `[Claude] chore: mark task complete in TODO.md`
    (The PR number won't be known yet; either commit with a placeholder and amend after the PR is opened, or omit the PR reference — the completion date alone is sufficient.)
+   This is the ONLY edit a run may make to TODO.md. Never append a new entry (see <implementation> step 4).
 
 4. Before pushing, re-sync the branch with the latest <BASE_BRANCH> so the PR merges cleanly even if main moved during this run:
    a. `git fetch origin <BASE_BRANCH>`.
@@ -142,7 +143,7 @@ After every meaningful change during implementation:
      • **Files modified** — list.
      • **Testing** — name the command run (the project test command from the working directory), its result (e.g. "24/24 passed"), and which tests specifically exercise the new or changed behavior. If you added new tests, list them. If the task touches code with no test coverage, say so explicitly: "No existing tests cover this code path; manual review recommended."
      • **Bookkeeping** — what the project bookkeeping update did (e.g. the exact changelog bullet added, whether merged or prepended, its category, and any pruned bullets), or "No bookkeeping update — change has no user-visible effect", or "Project defines no bookkeeping".
-     • **Notes** — pre-existing failures, follow-up items added to TODO.md, assumptions made, tasks skipped as vague or as missing/malformed Type, any tests updated (with one-line justification each), and — if a trivial base-merge conflict was auto-resolved in step 4c — which file(s) and how.
+     • **Notes** — pre-existing failures, follow-up observations (unrelated issues spotted but deliberately not fixed — one sentence each, naming what and where; these are NOT added to TODO.md, see <implementation> step 4), assumptions made, tasks skipped as vague or as missing/malformed Type, any tests updated (with one-line justification each), and — if a trivial base-merge conflict was auto-resolved in step 4c — which file(s) and how.
    - Ready for review, not draft.
    - **Marker readback (mandatory).** Immediately after opening the PR, if the selected entry carried a `<!-- id: ... -->` marker, confirm the PR body actually contains it: read the body back (`gh pr view <number> --json body`) and check the exact marker string is present. If it is missing or was mangled, repair it now — `gh pr edit <number> --body ...` re-appending the exact marker line on its own line — before proceeding to auto-merge. Do not skip this readback: reproducing the marker is agent-driven and easy to forget, and the failure mode is silent (the PR looks fine; only a later revert/iterate reveals it), so this check is what actually guarantees the entry stays traceable to its PR.
 
@@ -153,6 +154,7 @@ After every meaningful change during implementation:
 
 <hard_constraints>
 - NEVER end your turn with work outstanding. This routine runs as a GitHub Actions job that terminates the moment your turn ends, so a scheduled wakeup can never fire — no process remains to wake. Do not call ScheduleWakeup, do not end a turn saying you will wait for a notification or a background task, and do not yield while anything you started is still pending. If you started it, block on it and finish the run in the same turn. Two runs have been lost to this: both implemented the task correctly, committed, and pushed a branch, then yielded waiting on a backgrounded test suite and were terminated before opening the PR — leaving an orphaned branch, an unchecked task, and a run that looked like a failure but was not.
+- NEVER add a new entry to TODO.md. The only edit a run may make to that file is checking off the task it completed (<git_workflow> step 3). An appended entry is indistinguishable from a human-written one, so the next `backlog` run executes it unreviewed — the routine would be queueing work nobody chose. Unrelated issues you spot are reported in the PR body and the closing summary, never written to the file.
 - Exactly ONE task per run.
 - Never pick up a task whose `Type:` line is missing, malformed, or contains anything other than `bug` or `feature`. Such tasks are reported and skipped, not guessed at.
 - Never commit to <BASE_BRANCH> directly — always go through the per-task branch + PR + auto-merge flow, even though the end result lands on <BASE_BRANCH>.
@@ -171,5 +173,5 @@ After every meaningful change during implementation:
 </hard_constraints>
 
 <output>
-End the run with a one-paragraph summary: run mode, task selected, any tasks skipped as vague or as missing/malformed Type, branch name, PR URL, merge result (merged successfully / merge blocked with reason / aborted before PR), whether the selected entry's `<!-- id: ... -->` marker was reproduced and readback-confirmed in the PR body (or that the entry carried none), test result (e.g. "24/24 passed" or "aborted after 3 failing iterations — see test names below"), whether a base re-sync in step 4 was clean or required a trivial auto-resolve (and on which file), the project bookkeeping update made (or skipped, with reason), any bullets pruned, and any follow-up items added to TODO.md.
+End the run with a one-paragraph summary: run mode, task selected, any tasks skipped as vague or as missing/malformed Type, branch name, PR URL, merge result (merged successfully / merge blocked with reason / aborted before PR), whether the selected entry's `<!-- id: ... -->` marker was reproduced and readback-confirmed in the PR body (or that the entry carried none), test result (e.g. "24/24 passed" or "aborted after 3 failing iterations — see test names below"), whether a base re-sync in step 4 was clean or required a trivial auto-resolve (and on which file), the project bookkeeping update made (or skipped, with reason), any bullets pruned, and any follow-up observations you are reporting (never added to TODO.md — state each in a sentence so the human can decide whether it becomes a task).
 </output>
