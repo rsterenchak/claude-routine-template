@@ -19,6 +19,12 @@ Use whatever header comment form is idiomatic for the language — a `/* */` blo
 in C/C++/C#/Java, a module docstring in Python — but keep all three pieces. Do
 not add a course name, assignment number, or any field not listed above.
 
+Keep the paragraph to roughly three to five sentences. "A few sentences, not a
+one-liner" sets a floor, not a licence: a header that runs to two hundred words
+has stopped orienting the reader and started arguing with them. Say what the
+file does, what it reads or depends on, and how it is run. Leave the reasoning
+behind individual choices to the lines those choices live on.
+
 The header describes WHAT the file does and WHY it exists. Decisions about
 specific lines — why a comparison is inclusive, why one filter is explicit
 rather than incidental — belong in the inline comment on that line, where the
@@ -63,6 +69,20 @@ statement — terse, lowercase, describing what the line does:
 A block comment above each loop and significant control block stating its
 purpose: `/*Ensures input does not end until the user gives the command.*/`
 
+State what the block DOES, in one or two sentences. That example is the target
+length. These comments are descriptive, not argumentative — if you find yourself
+explaining why a value was chosen, why one approach beat another, or what would
+break otherwise, that reasoning belongs either in the file header (when it is
+about the file) or on the specific line it concerns (when it is about that line).
+A block comment that runs to a paragraph has absorbed work the other two layers
+should be doing.
+
+This matters most in languages where a single statement carries a lot of logic.
+In C a control block is a few lines and its comment stays short naturally; a SQL
+query or a chained expression can be an entire unit of work, and the comment
+above it will expand to match unless you hold it to the same one-or-two-sentence
+shape.
+
 ## Mark the end of every block
 
 Annotate closing braces with what they close — `}//end of main`,
@@ -72,9 +92,14 @@ applies to functions, loops, and other notable blocks. In brace-less languages
 
 ## Overall
 
-Near-exhaustive. Almost every line of substance carries an annotation — when in
-doubt, comment it. The goal is clarity for a reader following the logic line by
-line, not brevity.
+Near-exhaustive in COVERAGE, terse in each comment. Almost every line of
+substance carries an annotation — when in doubt, comment it — but each
+annotation is short. The density comes from how MANY comments there are, not
+from how long any one of them runs.
+
+The goal is clarity for a reader following the logic line by line. A reader who
+has to parse a paragraph before reaching the next statement is not being helped
+by it.
 
 ## Reference (C)
 
