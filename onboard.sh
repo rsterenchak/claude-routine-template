@@ -37,9 +37,7 @@
 #     the plan before anything is written.
 #   - Selective git add: only files this run created are staged for commit.
 #     Other untracked content in the target stays untouched.
-
 set -euo pipefail
-
 # ─────────────────────────────────────────────────────────────────
 # Configuration — update if your template repo moves.
 # ─────────────────────────────────────────────────────────────────
@@ -47,7 +45,6 @@ TEMPLATE_OWNER="rsterenchak"
 TEMPLATE_REPO="claude-routine-template"
 TEMPLATE_BRANCH="main"
 RAW_BASE="https://raw.githubusercontent.com/${TEMPLATE_OWNER}/${TEMPLATE_REPO}/${TEMPLATE_BRANCH}"
-
 # The set of files to fetch from the template, as repo-relative paths.
 # UPDATE THIS LIST when you add new files to the template.
 # Note: both manifest variants are fetched; the script keeps the right one
@@ -119,20 +116,16 @@ SQL_MANIFEST_FILES=(
   ".github/workflows/manifest-sql.yml>.github/workflows/manifest.yml"
 )
 TEMPLATE_FILES=()  # assembled after shape detection
-
 # Files actually created by THIS run (not skipped as already-existing). Used
 # later for selective `git add` so the auto-commit-push step never sweeps up
 # files the script didn't author.
 files_created=()
 WRITE_FILES=true   # set by the create-prompt below; may flip false to skip writes
-
-
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
 c_bold=$'\033[1m'; c_dim=$'\033[2m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'
 c_red=$'\033[31m'; c_rst=$'\033[0m'
-
 die() { echo "${c_red}error:${c_rst} $*" >&2; exit 1; }
 info() { echo "${c_dim}$*${c_rst}"; }
 # ─────────────────────────────────────────────────────────────────
@@ -146,7 +139,6 @@ info() { echo "${c_dim}$*${c_rst}"; }
 # ─────────────────────────────────────────────────────────────────
 NONINTERACTIVE="${ONBOARD_NONINTERACTIVE:-}"
 if [ -z "$NONINTERACTIVE" ] && [ -n "${CI:-}" ]; then NONINTERACTIVE=1; fi
-
 # ni_read VAR "prompt" "ni_value" — interactive: read VAR from the terminal;
 # non-interactive: VAR=ni_value (no terminal read).
 ni_read() {
@@ -154,7 +146,6 @@ ni_read() {
   if [ -n "$NONINTERACTIVE" ]; then printf -v "$__niv" '%s' "$__nid"; return 0; fi
   read -r -p "$__nip" "$__niv"
 }
-
 # ni_read_secret VAR "prompt" "ni_value" — same, but no echo on the interactive
 # read (the caller prints its own hidden-input prompt just above) and no trailing
 # newline; the existing 'echo' after the original read still supplies it.
@@ -164,7 +155,6 @@ ni_read_secret() {
   [ -n "$__nip" ] && printf '%s' "$__nip"
   read -rs "$__niv"
 }
-
 # enable_pages_main_root "<label suffix>" — enable GitHub Pages serving from
 # main/root (served-from-source and the .NET/SQL manifest shapes, which commit
 # src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
@@ -187,7 +177,6 @@ enable_pages_main_root() {
   echo "         ${c_dim}${__out}${c_rst}"
   return 0
 }
-
 # ─────────────────────────────────────────────────────────────────
 # 1. Validate target
 # ─────────────────────────────────────────────────────────────────
@@ -195,11 +184,9 @@ enable_pages_main_root() {
 TARGET="$1"
 [ -d "$TARGET" ] || die "target is not a directory: $TARGET"
 [ -d "$TARGET/.git" ] || die "target is not a git repo (no .git/): $TARGET"
-
 TARGET="$(cd "$TARGET" && pwd)"  # normalize to absolute
 echo "${c_bold}Onboarding target:${c_rst} $TARGET"
 echo
-
 # ─────────────────────────────────────────────────────────────────
 # 1b. Already-onboarded detection
 # .claude/routine.md is the distinctive signal — only routine-onboarded repos
@@ -219,7 +206,6 @@ if [ -f "$TARGET/.claude/routine.md" ]; then
     [yY]|[yY][eE][sS]) echo "  -> continuing"; echo ;;
     *) echo "  Aborted. No changes made."; exit 0 ;;
   esac
-
   # Unpushed-commit guard. A half-finished earlier run can leave scaffold files
   # committed locally but never pushed (e.g. the push 403'd on cross-repo
   # Codespace auth). Those files then read as "already exists", so THIS run skips
@@ -245,7 +231,6 @@ if [ -f "$TARGET/.claude/routine.md" ]; then
     fi
   fi
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 2. Detect project shape
 # ─────────────────────────────────────────────────────────────────
@@ -264,7 +249,6 @@ else
     break
   done < <(find "$TARGET" -maxdepth 2 -name package.json -not -path '*/node_modules/*' 2>/dev/null)
 fi
-
 # ── .NET / C# detection (runs before Node detection) ──
 # A C# project has a .csproj or .sln, no package.json, and doesn't deploy to the
 # web. If detected, it's one of two .NET shapes:
@@ -305,7 +289,6 @@ if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path
     IS_DESKTOP="true"
   fi
 fi
-
 IS_ESM="false"
 TEST_CMD="(not detected — fill in manually)"
 BUILD_CMD="(not detected — fill in manually)"
@@ -357,7 +340,6 @@ else
   info "No package.json found — this may not be a Node project, or the layout is unusual."
   info "WORKING_DIR defaults to '.'; you'll fill in commands manually."
 fi
-
 if [ "$IS_DOTNET" != "true" ]; then
   # Source directory detection — look for a src/ relative to the working dir.
   SRC_PREFIX="(not detected — fill in manually, e.g. src/)"
@@ -373,10 +355,8 @@ if [ "$IS_DOTNET" != "true" ]; then
       break
     fi
   done
-
   MANIFEST_VARIANT="gen-src-manifest.js"
   [ "$IS_ESM" = "true" ] && MANIFEST_VARIANT="gen-src-manifest.cjs"
-
   # ───────────────────────────────────────────────────────────────
   # 2c. Detect project SHAPE: build-pipeline vs served-from-source.
   #   build-pipeline    — has a build step that outputs to dist/ (or build/),
@@ -414,7 +394,6 @@ if [ "$IS_DOTNET" != "true" ]; then
   if find "$TARGET" -maxdepth 4 -name '*.sql' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null | grep -q .; then
     HAS_SQL="true"
   fi
-
   SHAPE="unknown"
   SHAPE_REASON=""
   if [ -z "$PKG" ] && [ "$HAS_SQL" = "true" ]; then
@@ -450,7 +429,6 @@ if [ "$IS_DOTNET" != "true" ]; then
     SHAPE_REASON="no build step detected (assuming served-from-source — verify)"
   fi
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 3. Show the plan
 # ─────────────────────────────────────────────────────────────────
@@ -515,7 +493,6 @@ case "$shape_confirm" in
   *) echo "Unrecognized response. Aborting."; exit 1 ;;
 esac
 echo
-
 # ─────────────────────────────────────────────────────────────────
 # 2b. Project purpose — personal vs assignment
 # This drives CLAUDE.md customization. The template ships with an
@@ -537,7 +514,6 @@ case "$purpose_pick" in
 esac
 echo "  -> $PURPOSE"
 echo
-
 # ─────────────────────────────────────────────────────────────────
 # 2c. Optional gh CLI integration
 # Detects the GitHub CLI and (if installed and authenticated) offers to
@@ -568,7 +544,6 @@ if command -v gh >/dev/null 2>&1; then
     echo
   fi
 fi
-
 # Assemble the active file list. Universal files for every shape; Node shapes
 # also get the npm test workflow + manifest generators; then the shape-specific
 # workflow. The .NET shapes (console/desktop) skip NODE_FILES entirely (no npm
@@ -597,17 +572,32 @@ case "$SHAPE" in
     : # universal files only — no test/deploy/manifest workflow
     ;;
 esac
-
 # Coursework repos also get a stub assignment.md at the repo root. It carries
 # the assignment spec / rubric / constraints (read by the agent and the PWA's
 # assignment card), keeping CLAUDE.md a pure conventions file. Purpose is
 # orthogonal to shape, so it's appended after the shape case — every assignment
 # shape gets it, personal repos get none. Flows through the normal fetch +
 # skip-existing + commit machinery below; no {{placeholders}} to fill.
+#
+# The two STYLE DOCS land under .claude/ rather than the repo root, via the
+# SRC>DEST rename (same mechanism as test-dotnet.yml): routine-base.md's
+# <implementation> step 3 looks in .claude/ for style documentation, so one
+# directory is the single place both the routine and this script agree on.
+#   style.md            — naming, structure, and the shape of a class or module,
+#                         plus the Style: naive / optimise modes.
+#   commenting-style.md — how comments are written.
+# Assignment-only on purpose: a personal repo's style is whatever its existing
+# code already does, and step 3 skips these silently when they're absent, which
+# is what keeps routine-base.md byte-identical across the whole fleet.
 if [ "$PURPOSE" = "assignment" ]; then
-  TEMPLATE_FILES+=( "assignment.md" ".claude/derive.md" ".github/workflows/claude-derive.yml" "commenting-style.md" )
+  TEMPLATE_FILES+=(
+    "assignment.md"
+    ".claude/derive.md"
+    ".github/workflows/claude-derive.yml"
+    "commenting-style.md>.claude/commenting-style.md"
+    "style.md>.claude/style.md"
+  )
 fi
-
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
   # Entries may be "SRC>DEST" (fetch SRC from template, write as DEST in target).
@@ -630,7 +620,6 @@ case "$confirm" in
      echo "  permissions) still apply — they're idempotent and safe to re-run." ;;
 esac
 echo
-
 # ─────────────────────────────────────────────────────────────────
 # 4. Fetch + write (skip-existing)
 # ─────────────────────────────────────────────────────────────────
@@ -647,7 +636,6 @@ for f in "${TEMPLATE_FILES[@]}"; do
   # skip the non-chosen manifest variant
   if [ "$dest_rel" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
   if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
-
   dest="$TARGET/$dest_rel"
   if [ -e "$dest" ]; then
     skipped=$((skipped+1))
@@ -667,7 +655,6 @@ echo
 echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
 echo
 fi   # end "$WRITE_FILES" guard around the fetch/write loop
-
 # ─────────────────────────────────────────────────────────────────
 # 4a. CLAUDE.md customization — resolve the ASSIGNMENT CONTEXT block per purpose.
 # The template's CLAUDE.md ships with an ASSIGNMENT CONTEXT block (start marker
@@ -702,14 +689,16 @@ if [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this
   else
     # Assignment: replace the block (start marker through END marker, inclusive)
     # with a short pointer at assignment.md. The '---' separators bordering the
-    # block stay, so the pointer reads as its own clean section.
+    # block stay, so the pointer reads as its own clean section. The style-doc
+    # line names .claude/ because that's where onboard writes both docs and
+    # where routine-base.md's step 3 looks for them.
     awk '
       /ASSIGNMENT CONTEXT — fill in if this is coursework/ {
         print "## Assignment context";
         print "";
         print "This repo is coursework. The assignment spec, rubric, and constraints live in `assignment.md` at the repo root — read it when working here. Keep this file (CLAUDE.md) for build and code conventions.";
         print "";
-        print "Code you write for this assignment MUST follow the commenting style in `commenting-style.md` at the repo root — read it before writing or editing any source file.";
+        print "Code you write for this assignment MUST follow the style docs in `.claude/` — `style.md` (naming, structure, class and module shape) and `commenting-style.md` (how comments are written). Read both before writing or editing any source file.";
         inblock = 1;
         next
       }
@@ -718,13 +707,11 @@ if [ -f "$CLAUDE_MD_TARGET" ] && grep -q "ASSIGNMENT CONTEXT — fill in if this
       { print }
     ' "$CLAUDE_MD_TARGET" > "$CLAUDE_MD_TARGET.tmp" \
         && mv "$CLAUDE_MD_TARGET.tmp" "$CLAUDE_MD_TARGET"
-    echo "  ${c_dim}pointed CLAUDE.md at assignment.md (assignment project)${c_rst}"
+    echo "  ${c_dim}pointed CLAUDE.md at assignment.md + .claude/ style docs (assignment project)${c_rst}"
     echo
   fi
 fi
-
 REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "<owner>/<repo>")"
-
 # ─────────────────────────────────────────────────────────────────
 # 4b. Fill placeholders — substitute detected + prompted values into the
 #     files that contain {{...}} markers. routine-base.md and the manifest
@@ -734,21 +721,16 @@ REPO_GUESS="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#
 # ─────────────────────────────────────────────────────────────────
 echo "${c_bold}Fill placeholders${c_rst} — press Enter to accept the [detected default], or type a value."
 echo
-
 # Default project name = repo basename (from the remote guess, or dir name).
 NAME_DEFAULT="$(basename "$REPO_GUESS")"
 [ "$NAME_DEFAULT" = "<repo>" ] && NAME_DEFAULT="$(basename "$TARGET")"
-
 ni_read IN_NAME "  Project name [${NAME_DEFAULT}]: " "${ONBOARD_NAME:-}"
 PROJECT_NAME="${IN_NAME:-$NAME_DEFAULT}"
-
 ni_read IN_DESC "  One-line description: " "${ONBOARD_DESC:-}"
 PROJECT_DESCRIPTION="${IN_DESC:-(fill in a one-line description)}"
-
 STACK_DEFAULT="$([ "$IS_ESM" = "true" ] && echo "ESM (type: module)" || echo "CommonJS")"
 ni_read IN_STACK "  Stack [${STACK_DEFAULT}]: " "${ONBOARD_STACK:-}"
 STACK="${IN_STACK:-$STACK_DEFAULT}"
-
 # Derived defaults for the remaining slots, falling back to readable hints when
 # detection failed (so a non-filled placeholder reads as an obvious TODO, not a
 # literal {{...}} that could slip into a committed workflow file).
@@ -797,16 +779,13 @@ else
   INSTALL_CMD_VAL="npm install"
   DEPLOY_TARGET_VAL="GitHub Pages"
 fi
-
 # sed-escape a replacement string: backslash, the chosen delimiter (|), and &.
 sed_escape() { printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'; }
-
 # Apply one {{KEY}} -> value substitution across a file, in place.
 subst() { # $1=file  $2=key  $3=value
   local esc; esc="$(sed_escape "$3")"
   sed -i.bak "s|{{$2}}|$esc|g" "$1" && rm -f "$1.bak"
 }
-
 # Files that carry placeholders (relative to target). Skip any that were skipped
 # during creation (already existed — don't rewrite the user's own file) and any
 # that don't exist.
@@ -850,7 +829,6 @@ echo "  ${c_grn}filled${c_rst} placeholders in $(printf '%s, ' "${PLACEHOLDER_FI
 echo "  ${c_yel}note${c_rst}  the \"Key files\" section of CLAUDE.md and the freeform sections of"
 echo "        routine.md are not auto-filled — complete those by hand."
 echo
-
 # ─────────────────────────────────────────────────────────────────
 # 4c. gh CLI auto-configuration (if consented earlier)
 # Runs only when USE_GH=true. Each sub-step is independent — a failure in
@@ -873,7 +851,6 @@ if [ "$USE_GH" = "true" ]; then
     echo
   else
     echo "${c_bold}Configuring GitHub repo settings via gh CLI${c_rst} (${c_dim}$REPO_FOR_GH${c_rst})"
-
     # 1. Workflow permissions — universal, applies to all shapes.
     # Sets read-write permissions and enables can-approve-pull-request-reviews
     # (needed for claude-run.yml's auto-merge step).
@@ -885,7 +862,6 @@ if [ "$USE_GH" = "true" ]; then
     else
       echo "  ${c_red}FAILED${c_rst} workflow permissions (set manually in Settings -> Actions -> General -> Workflow permissions)"
     fi
-
     # 2. Pages source — web shapes only. console/desktop skip entirely.
     case "$SHAPE" in
       build-pipeline)
@@ -915,7 +891,6 @@ if [ "$USE_GH" = "true" ]; then
         # No Pages for repo-only — no manifest to serve.
         ;;
     esac
-
     # 3. OAuth secret — optional, prompted separately because it requires the
     # user to provide the token value. Uses read -s to suppress echo (the token
     # never appears on-screen or in shell history).
@@ -941,7 +916,6 @@ if [ "$USE_GH" = "true" ]; then
         echo "  ${c_dim}-> will need to add the secret manually (see step below)${c_rst}"
         ;;
     esac
-
     # 4. Supabase secrets — required by claude-triage.yml (reading flagged rows +
     # writing verdicts back). Same two values across ALL your repos (one Supabase
     # project), so this is a paste of the same URL + service_role key each time.
@@ -976,7 +950,6 @@ if [ "$USE_GH" = "true" ]; then
         echo "  ${c_dim}-> will need to add the Supabase secrets manually (see step below)${c_rst}"
         ;;
     esac
-
     # 5. Injector secrets — required by claude-run.yml's post-merge refactor
     # scan step. Same two values across ALL your repos (one Worker), so this is
     # a paste of the same URL + secret each time. Optional: the run step guards
@@ -1016,7 +989,6 @@ if [ "$USE_GH" = "true" ]; then
     echo
   fi
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 4d. Codespace auth auto-fix
 # Fresh Codespaces have a pinned $GITHUB_TOKEN env var that's scoped to the
@@ -1046,7 +1018,6 @@ if [ "${CODESPACES:-}" = "true" ]; then
   # failure case (broken auth).
   ls_remote_ok=true
   git -C "$TARGET" ls-remote --heads origin >/dev/null 2>&1 || ls_remote_ok=false
-
   if [ "$ls_remote_ok" = "false" ]; then
     echo "${c_yel}Codespace auth note:${c_rst} this Codespace's pinned GITHUB_TOKEN doesn't have"
     echo "  write access to the target repo. ${c_bold}git push will fail${c_rst} until git's credentials"
@@ -1057,7 +1028,6 @@ if [ "${CODESPACES:-}" = "true" ]; then
       ""|[yY]|[yY][eE][sS])
         echo "  ${c_dim}-> clearing GITHUB_TOKEN for this script's subprocess...${c_rst}"
         unset GITHUB_TOKEN
-
         # Check whether gh is already authenticated. If yes, we just need to
         # swap the credential helper. If no, launch the interactive login.
         if gh auth status >/dev/null 2>&1; then
@@ -1073,7 +1043,6 @@ if [ "${CODESPACES:-}" = "true" ]; then
             echo
           fi
         fi
-
         # Swap git's credential helper to gh's full-user credentials. This is
         # the step that actually unblocks push — gh auth login alone doesn't
         # touch git's config.
@@ -1094,7 +1063,6 @@ if [ "${CODESPACES:-}" = "true" ]; then
           echo "          ${c_dim}git config --global --unset credential.helper${c_rst}"
           echo "          ${c_dim}gh auth setup-git${c_rst}"
         fi
-
         echo
         echo "  ${c_dim}Persistence note: GITHUB_TOKEN will reset on every new terminal in this${c_rst}"
         echo "  ${c_dim}Codespace. To make the unset stick across sessions, add it to ~/.bashrc:${c_rst}"
@@ -1109,7 +1077,6 @@ if [ "${CODESPACES:-}" = "true" ]; then
     esac
   fi
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 4e. Auto-commit-and-push the scaffolded files
 # Stages only the files this run created (tracked in files_created), so any
@@ -1127,13 +1094,11 @@ fi
 if [ ${#files_created[@]} -gt 0 ]; then
   # Detect target branch
   TARGET_BRANCH="$(git -C "$TARGET" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
-
   # Compose the manual-recovery command block once, used in both branches.
   manual_cmds=$(printf '       cd %s\n' "$TARGET"
                 printf '       git add %s\n' "${files_created[*]}"
                 printf '       git commit -m "Scaffold Claude routine pipeline"\n'
                 printf '       git push origin %s\n' "$TARGET_BRANCH")
-
   echo "${c_bold}Commit + push${c_rst}"
   echo "  ${#files_created[@]} files ready to commit. Will stage ONLY the files this run created"
   echo "  (other untracked files in the target are left alone). Target branch: ${c_bold}$TARGET_BRANCH${c_rst}"
@@ -1161,7 +1126,6 @@ if [ ${#files_created[@]} -gt 0 ]; then
             echo "$manual_cmds"
           fi
         fi
-
         # Push. Don't suppress output — diagnostics from a failed push are
         # what the user needs.
         echo "  ${c_dim}-> pushing to origin/$TARGET_BRANCH...${c_rst}"
@@ -1188,7 +1152,6 @@ if [ ${#files_created[@]} -gt 0 ]; then
       ;;
   esac
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 4d. Registry insert (non-interactive / CI only)
 # Add this repo to the shared Supabase inject_targets table so the Worker's
@@ -1233,14 +1196,11 @@ if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
   fi
   echo
 fi
-
 # ─────────────────────────────────────────────────────────────────
 # 5. Remaining manual steps — with detected values pre-filled
 # ─────────────────────────────────────────────────────────────────
-
 cat <<EOF
 ${c_bold}Remaining manual steps:${c_rst}
-
   1. Complete the freeform sections the script can't auto-fill:
        - CLAUDE.md "Key files in this repo" — list the load-bearing files.
        - CLAUDE.md — delete the onboarding-checklist section once reviewed.
@@ -1248,13 +1208,10 @@ ${c_bold}Remaining manual steps:${c_rst}
          areas / notes sections (or write "none" where nothing applies).
      If WORKING_DIR is ".", also remove the now-redundant working-directory:
      lines from the workflow files (they read "working-directory: .").
-
   2. Claude GitHub App — already covered by your all-repositories install, so
      no action is needed here. (Only if you later narrow the App's scope would
      you re-add this repo: https://github.com/apps/claude )
-
 EOF
-
 # Step 3: OAuth secret — conditionally show as done if gh auto-config set it.
 if [ "$GH_SECRET_DONE" = "true" ]; then
   echo "  3. ${c_grn}[DONE via gh CLI ✓]${c_rst} CLAUDE_CODE_OAUTH_TOKEN secret already set."
@@ -1264,7 +1221,6 @@ else
   echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
   echo
 fi
-
 # Step 3b: Supabase secrets — needed by claude-triage.yml. Conditionally shown
 # as done if gh auto-config set them above.
 if [ "${GH_SUPABASE_DONE:-false}" = "true" ]; then
@@ -1276,7 +1232,6 @@ else
   echo "       SUPABASE_URL = https://<ref>.supabase.co (no /rest/v1); key = the 'secret' Legacy API key"
   echo
 fi
-
 # Step 3c: injector secrets — used by claude-run.yml's post-merge refactor scan
 # step. Optional: the step skips cleanly without them, and only a repo with a JS
 # source tree under its registry src_prefix can produce a scan at all.
@@ -1296,7 +1251,6 @@ else
   fi
   echo
 fi
-
 # Step 4: inject registry — the repo must be a row in Supabase inject_targets for
 # the Worker allowlist + the app workspace to reach it. Non-interactive (CI) runs
 # insert it automatically (result shown in the Registry line above); interactive
@@ -1311,11 +1265,23 @@ else
   echo "       Inject settings -> + Add target   (repo: $REPO_GUESS, file: TODO.md)"
   echo
 fi
-
 cat <<EOF
   5. Verify the manifest publishes after first deploy, then inject a test entry
      and confirm claude-run.yml picks it up.
-
+EOF
+# Step 6: style docs — assignment repos only. The scaffolded style.md describes
+# the owner's conventions generically; a repo in a language it doesn't cover
+# wants a section adding, and routine-base.md's step 3 reads whatever is there.
+if [ "$PURPOSE" = "assignment" ]; then
+  cat <<EOF
+  6. Review the scaffolded style docs in .claude/ — style.md (naming, structure,
+     class and module shape) and commenting-style.md. Runs read BOTH before
+     writing code, and the docs win where they disagree with thin existing code.
+     If this assignment is in a language style.md doesn't cover, add a section
+     for it; otherwise nothing to do.
+EOF
+fi
+cat <<EOF
 ${c_bold}Values that were filled in:${c_rst}
   project name:  $PROJECT_NAME
   description:   $PROJECT_DESCRIPTION
@@ -1325,9 +1291,7 @@ ${c_bold}Values that were filled in:${c_rst}
   test command:  $TEST_CMD_VAL
   build command: $BUILD_CMD_VAL
   (review these in the files; re-run with a fresh checkout if any are wrong)
-
 EOF
-
 if [ "$skipped" -gt 0 ]; then
   echo "${c_yel}Note:${c_rst} $skipped file(s) already existed and were skipped — placeholders in"
   echo "      those were NOT touched (the script never edits files it didn't create)."
@@ -1335,5 +1299,4 @@ if [ "$skipped" -gt 0 ]; then
   echo "      content and fill its placeholders by hand."
   echo
 fi
-
 echo "${c_grn}Done.${c_rst}"
