@@ -9,6 +9,26 @@ happen in later stages — stay in your lane.
 Process the flagged tasks **one at a time, in order**. Read real source before
 deciding anything — never reason from the task title alone.
 
+## You are the only actor
+
+There is no background agent, no subagent, no parallel worker, and no later turn.
+This routine runs inside a single `workflow_dispatch` job that ends the instant
+your turn ends — nothing resumes it, and no findings ever "come back". Every piece
+of investigation happens inline, in this turn, by you.
+
+Concretely:
+
+- Never delegate a task, hand it off, or describe it as under investigation
+  elsewhere. If you catch yourself writing that you will finish something later,
+  that is the bug — finish it now or take the `needs_words` exit below.
+- Never end your turn with a row still at `triaging`. A row you read in Step 1 and
+  did not PATCH is a row stranded until the app's reaper marks it failed, which
+  costs Robert a full re-flag.
+- `needs_words` is the designated escape hatch for anything you cannot resolve
+  within this run. Running low on turns, hitting an unreadable area of the code,
+  or finding a task too tangled for a fast pass are all `needs_words` with a
+  precise question — never a reason to defer.
+
 ## Environment
 
 - `SUPABASE_URL` — the bare project URL, `https://<ref>.supabase.co`, with NO
@@ -108,6 +128,26 @@ history. Use an ISO timestamp for `ts`.
 serialize check and the post-run diff guard downstream, so getting them right
 here matters.
 
+## Step 4 — reconcile before you finish
+
+Before writing the closing summary, re-run the Step 1 query for `PROJECT_ID` and
+confirm nothing is still at `triaging`:
+
+```
+curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id,todo_id,context" \
+  -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+  -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+```
+
+An empty array is the expected result — every row you read in Step 1 should now
+carry a verdict. If any rows come back, you missed them: PATCH each one to
+`needs_words` using the Step 3 shape, with a question naming specifically what the
+sweep could not resolve, and preserving any existing `thread` messages. Do this
+BEFORE the summary, not after — the summary is the last thing you write.
+
+If this reconcile curl itself fails, note it in the summary and finish; do not
+retry in a loop and do not abort.
+
 ## TODO.md entry format (for `drafted`)
 
 Robert's automation parses these, so the format is exact, not stylistic:
@@ -142,9 +182,17 @@ Rules:
   do not touch rows outside this project.
 - One task at a time. Finish a task's verdict before moving to the next.
 - If a curl fails, note it and continue to the next task — don't abort the sweep.
+- No delegation and no deferral. You are the only actor in this run (see above);
+  do every read and every PATCH yourself, in this turn.
+- Every row read in Step 1 must reach a terminal verdict (`needs_words`,
+  `needs_mockup`, or `drafted`) before you write the summary. Step 4 is the check.
 
 ## Closing summary
 
 End with ONE paragraph naming what you did per task — how many flagged, and for
 each: the verdict and a one-line why, citing the specific file(s) you read. If
-nothing was flagged, say so. (This paragraph is what surfaces in the run log.)
+nothing was flagged, say so. State both counts explicitly: rows read in Step 1 and
+verdicts written. They MUST match — if they don't, you skipped Step 4, so go back
+and finish it before summarising. Never write a summary that describes work as
+still in flight; by the time you write this paragraph the sweep is over. (This
+paragraph is what surfaces in the run log.)
