@@ -673,6 +673,15 @@ if [ -n "$PREFLIGHT" ]; then
       PF_WARN+=("found ${pf_exe} runnable non-test Exe project(s) — run-capture.yml auto-discovery needs exactly one or the Capture card returns nothing")
     fi
   fi
+  # The per-shape VALUE block runs later in the script, so MANIFEST_VARIANT and
+  # the install command still hold pre-override detection values at this point.
+  # Mirror the final values here rather than reporting stale ones.
+  case "$SHAPE" in
+    console|desktop|maui) pf_install="dotnet restore"; pf_manifest="gen-src-manifest.js" ;;
+    sql)                  pf_install="none";           pf_manifest="gen-src-manifest.js" ;;
+    repo-only)            pf_install="none";           pf_manifest="(none)" ;;
+    *)                    pf_install="npm install";    pf_manifest="$MANIFEST_VARIANT" ;;
+  esac
   # Repo slug straight from the clone, so this block is self-contained.
   pf_slug="$(git -C "$TARGET" remote get-url origin 2>/dev/null \
     | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
@@ -683,10 +692,10 @@ if [ -n "$PREFLIGHT" ]; then
     "$(pf_esc "$PURPOSE")" \
     "$(pf_esc "$WORKING_DIR")" \
     "$(pf_esc "$SRC_PREFIX")" \
-    "$(pf_esc "${INSTALL_CMD_VAL:-npm install}")" \
+    "$(pf_esc "$pf_install")" \
     "$(pf_esc "$TEST_CMD")" \
     "$(pf_esc "$BUILD_CMD")" \
-    "$(pf_esc "$MANIFEST_VARIANT")" \
+    "$(pf_esc "$pf_manifest")" \
     "$IS_ESM" \
     "$(pf_arr "${PF_CREATE[@]}")" \
     "$(pf_arr "${PF_SKIP[@]}")" \
