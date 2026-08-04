@@ -1,4 +1,7 @@
 name: Onboard a repo
+# correlation_id is echoed here so the Worker can find this run by name
+# (workflow_dispatch does not return a run id to the caller).
+run-name: Onboard ${{ inputs.target_repo }}${{ inputs.correlation_id && format(' · {0}', inputs.correlation_id) || '' }}
 
 # Route B orchestrator: runs onboard.sh (the single onboarding brain) head-lessly
 # against a target repo. Dispatched by the Worker's onboard route (piece 3) or
@@ -51,8 +54,13 @@ on:
       preflight:
         description: "Report only — resolve shape and check requirements, write nothing"
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: "false"
+      correlation_id:
+        description: "Opaque id echoed into run-name and the preflight report POST"
+        required: false
+        type: string
+        default: ""
 
 # Serialize onboarding of the same repo so two dispatches can't race on the push.
 concurrency:
@@ -100,7 +108,7 @@ jobs:
           ONBOARD_NONINTERACTIVE: "1"
           # Report-only. onboard.sh exits before the fetch/write loop and before
           # any gh call, so nothing on the target repo is touched.
-          ONBOARD_PREFLIGHT: ${{ inputs.preflight && '1' || '' }}
+          ONBOARD_PREFLIGHT: ${{ inputs.preflight == 'true' && '1' || '' }}
           ONBOARD_PREFLIGHT_OUT: /tmp/preflight.json
           # gh (used by onboard.sh for `gh api` + `gh secret set`) reads GH_TOKEN.
           GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
@@ -124,10 +132,11 @@ jobs:
           ./onboard.sh target-repo
 
       - name: Report preflight to the Worker
-        if: ${{ inputs.preflight }}
+        if: ${{ inputs.preflight == 'true' }}
         env:
           INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
           INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
         run: |
           set -uo pipefail
           if [ -z "${INJECTOR_URL:-}" ] || [ -z "${INJECTOR_SECRET:-}" ]; then
@@ -145,12 +154,13 @@ jobs:
           curl -sS -X POST "${INJECTOR_URL}" \
             -H "content-type: application/json" \
             -H "authorization: Bearer ${INJECTOR_SECRET}" \
-            --data "$(jq -c '{preflight_result: true} + .' /tmp/preflight.json)" \
+            --data "$(jq -c --arg cid "$CORRELATION_ID" \
+                 '{preflight_result: true, correlation_id: $cid} + .' /tmp/preflight.json)" \
             || echo "report POST failed (non-fatal)"
           cat /tmp/preflight.json
 
       - name: Verify the scaffold reached origin
-        if: ${{ !inputs.preflight }}
+        if: ${{ inputs.preflight != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
           TARGET_REPO: ${{ inputs.target_repo }}
