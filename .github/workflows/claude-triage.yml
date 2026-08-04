@@ -65,10 +65,19 @@ jobs:
           # a workflow one — see .claude/triage.md. --dangerously-skip-permissions:
           # no human to approve the curl calls the routine makes; safe here — the
           # runner is ephemeral and contents:read means it cannot push to the repo
-          # even if it tried. Triage only needs Read/Grep/Glob/Bash, so once its
-          # behavior is confirmed this can tighten to
-          # --allowedTools "Read,Grep,Glob,Bash".
-          claude_args: "--max-turns 80 --model claude-sonnet-5 --dangerously-skip-permissions"
+          # even if it tried.
+          #
+          # --allowedTools is pinned to exactly what triage needs to read source
+          # and talk to PostgREST. This is a CORRECTNESS guard, not just least
+          # privilege: with Task available the agent can hand a row to a subagent,
+          # narrate that it will "finish writing the verdict once its findings come
+          # back", and end its turn — which ends the JOB, because nothing resumes a
+          # workflow_dispatch run. The row then sits at 'triaging' until the client
+          # reaper flips it to failed. Removing Task makes that failure mode
+          # structurally unreachable rather than merely discouraged by the prompt.
+          # Do not re-add Task here without also re-reading the "You are the only
+          # actor" section of .claude/triage.md.
+          claude_args: "--max-turns 80 --model claude-sonnet-5 --dangerously-skip-permissions --allowedTools Read,Grep,Glob,Bash"
           # Temporary: surface the agent's full output while verifying the sweep
           # end-to-end (also how the Worker's run_result reads the closing summary).
           show_full_output: true
@@ -81,3 +90,10 @@ jobs:
             tasks from Supabase, classify each against the real source in this
             checkout, and write the verdict back to Supabase. Complete the whole
             sweep, then exit with the one-paragraph summary the routine specifies.
+
+            You are the only agent in this run and there is no later turn. This
+            job ends the moment your turn ends, so every verdict must be PATCHed
+            to Supabase BEFORE you write the summary. Never end your turn with a
+            row still at 'triaging' and never describe work as continuing in the
+            background — if you cannot resolve a task, give it the needs_words
+            verdict and move on.
