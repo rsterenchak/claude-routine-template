@@ -48,6 +48,11 @@ on:
         type: choice
         default: personal
         options: [personal, assignment]
+      preflight:
+        description: "Report only — resolve shape and check requirements, write nothing"
+        required: false
+        type: boolean
+        default: false
 
 # Serialize onboarding of the same repo so two dispatches can't race on the push.
 concurrency:
@@ -93,6 +98,10 @@ jobs:
       - name: Onboard (non-interactive)
         env:
           ONBOARD_NONINTERACTIVE: "1"
+          # Report-only. onboard.sh exits before the fetch/write loop and before
+          # any gh call, so nothing on the target repo is touched.
+          ONBOARD_PREFLIGHT: ${{ inputs.preflight && '1' || '' }}
+          ONBOARD_PREFLIGHT_OUT: /tmp/preflight.json
           # gh (used by onboard.sh for `gh api` + `gh secret set`) reads GH_TOKEN.
           GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
           # auto => empty, so onboard.sh runs its own shape detection. Written as
@@ -114,7 +123,29 @@ jobs:
           chmod +x onboard.sh
           ./onboard.sh target-repo
 
+      - name: Report preflight to the Worker
+        if: ${{ inputs.preflight }}
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+        run: |
+          set -uo pipefail
+          if [ -z "${INJECTOR_URL:-}" ] || [ -z "${INJECTOR_SECRET:-}" ]; then
+            echo "Worker URL/secret absent — printing the report only."
+            cat /tmp/preflight.json
+            exit 0
+          fi
+          # Route lands in change 3. Until then this 404s, which is fine: the
+          # report is in the log either way and a reporting failure must not
+          # fail a read-only run.
+          curl -sS -X POST "${INJECTOR_URL}/preflight" \
+            -H "content-type: application/json" \
+            -H "x-injector-secret: ${INJECTOR_SECRET}" \
+            --data @/tmp/preflight.json || echo "report POST failed (non-fatal)"
+          cat /tmp/preflight.json
+
       - name: Verify the scaffold reached origin
+        if: ${{ !inputs.preflight }}
         env:
           GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
           TARGET_REPO: ${{ inputs.target_repo }}
