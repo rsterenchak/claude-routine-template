@@ -135,13 +135,18 @@ jobs:
             cat /tmp/preflight.json
             exit 0
           fi
-          # Route lands in change 3. Until then this 404s, which is fine: the
-          # report is in the log either way and a reporting failure must not
-          # fail a read-only run.
-          curl -sS -X POST "${INJECTOR_URL}/preflight" \
+          # The Worker routes on a body flag, not a URL path, and everything
+          # POSTs to the root. preflight_result is checked ABOVE resolveTarget,
+          # so this works for repos not yet in inject_targets — which is the
+          # whole point. Handler lands in change 3; until then this falls
+          # through to handleInject and is rejected, which is fine: the report
+          # is in the log either way and a reporting failure must never fail a
+          # read-only run.
+          curl -sS -X POST "${INJECTOR_URL}" \
             -H "content-type: application/json" \
-            -H "x-injector-secret: ${INJECTOR_SECRET}" \
-            --data @/tmp/preflight.json || echo "report POST failed (non-fatal)"
+            -H "authorization: Bearer ${INJECTOR_SECRET}" \
+            --data "$(jq -c '{preflight_result: true} + .' /tmp/preflight.json)" \
+            || echo "report POST failed (non-fatal)"
           cat /tmp/preflight.json
 
       - name: Verify the scaffold reached origin
