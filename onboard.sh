@@ -122,6 +122,29 @@ TEMPLATE_FILES=()  # assembled after shape detection
 files_created=()
 WRITE_FILES=true   # set by the create-prompt below; may flip false to skip writes
 # ─────────────────────────────────────────────────────────────────
+# Preflight (ONBOARD_PREFLIGHT=1): report-only. Runs detection and the
+# create/skip listing, emits a JSON report, and exits BEFORE the fetch/write
+# loop and before any repo-settings mutation. Nothing in the target repo or on
+# GitHub is touched. ONBOARD_PREFLIGHT_OUT optionally names a file to also
+# write the report to (the CI path uses this to POST it to the Worker).
+# ─────────────────────────────────────────────────────────────────
+PREFLIGHT="${ONBOARD_PREFLIGHT:-}"
+PREFLIGHT_OUT="${ONBOARD_PREFLIGHT_OUT:-}"
+PF_CREATE=()
+PF_SKIP=()
+# Minimal JSON emitters — no jq dependency; values here are plain strings.
+pf_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+pf_arr() {
+  local first=1 x
+  printf '['
+  for x in "$@"; do
+    [ $first -eq 1 ] || printf ','
+    printf '"%s"' "$(pf_esc "$x")"
+    first=0
+  done
+  printf ']'
+}
+# ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
 c_bold=$'\033[1m'; c_dim=$'\033[2m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'
@@ -525,7 +548,7 @@ echo
 # ─────────────────────────────────────────────────────────────────
 USE_GH=false
 GH_INSTALLED=false
-if command -v gh >/dev/null 2>&1; then
+if [ -z "$PREFLIGHT" ] && command -v gh >/dev/null 2>&1; then
   GH_INSTALLED=true
   if gh auth status >/dev/null 2>&1; then
     echo "${c_bold}gh CLI detected and authenticated${c_rst}"
@@ -607,11 +630,82 @@ for f in "${TEMPLATE_FILES[@]}"; do
   if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
   if [ -e "$TARGET/$dest_rel" ]; then
     echo "  ${c_yel}skip${c_rst}   $dest_rel  (already exists)"
+    PF_SKIP+=("$dest_rel")
   else
     echo "  ${c_grn}create${c_rst} $dest_rel"
+    PF_CREATE+=("$dest_rel")
   fi
 done
 echo
+# ─────────────────────────────────────────────────────────────────
+# Preflight exit. Everything the report needs is resolved by this point:
+# shape, working dir, src prefix, derived commands, manifest variant, and the
+# create/skip listing above. The interview (name/description/stack) comes
+# later and is irrelevant to a preflight. Nothing has been written yet.
+# ─────────────────────────────────────────────────────────────────
+if [ -n "$PREFLIGHT" ]; then
+  PF_WARN=()
+  # The silent failures — things detection notices but never says out loud.
+  if [ "$SHAPE" = "build-pipeline" ] || [ "$SHAPE" = "served-from-source" ]; then
+    if [ ! -f "$WD_ABS/package-lock.json" ]; then
+      PF_WARN+=("no package-lock.json in ${WORKING_DIR} — test.yml sets cache: npm with cache-dependency-path, so setup-node fails the job before any test runs")
+    fi
+    if [ -f "$WD_ABS/angular.json" ]; then
+      PF_WARN+=("angular.json present — confirm outputPath flattens to dist/, build sets --base-href /<repo>/, and a test:run script exists (ng test defaults to Karma + real Chrome in watch mode)")
+    fi
+  fi
+  case "$SRC_PREFIX" in
+    "("*) PF_WARN+=("SRC_DIR not detected — the inject_targets srcPrefix will be wrong and the file picker will not resolve files") ;;
+  esac
+  case "$TEST_CMD" in
+    "("*) PF_WARN+=("no test script found — TEST_COMMAND falls back to npm test, which fails if no test script exists") ;;
+  esac
+  case "$SHAPE_REASON" in
+    *verify*) PF_WARN+=("shape inferred without a recognized bundler config — verify before proceeding") ;;
+  esac
+  if [ "$SHAPE" = "console" ]; then
+    pf_exe=0
+    while IFS= read -r p; do
+      if grep -qi 'Microsoft.NET.Test.Sdk' "$p" 2>/dev/null; then continue; fi
+      if grep -qiE '<OutputType>[[:space:]]*Exe' "$p" 2>/dev/null; then pf_exe=$((pf_exe+1)); fi
+    done < <(find "$TARGET" -name '*.csproj' -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null)
+    if [ "$pf_exe" -ne 1 ]; then
+      PF_WARN+=("found ${pf_exe} runnable non-test Exe project(s) — run-capture.yml auto-discovery needs exactly one or the Capture card returns nothing")
+    fi
+  fi
+  # Repo slug straight from the clone, so this block is self-contained.
+  pf_slug="$(git -C "$TARGET" remote get-url origin 2>/dev/null \
+    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
+  PF_JSON="$(printf '{"repo":"%s","shape":"%s","shape_reason":"%s","purpose":"%s","working_dir":"%s","src_prefix":"%s","install_command":"%s","test_command":"%s","build_command":"%s","manifest_variant":"%s","is_esm":%s,"create":%s,"skip":%s,"warnings":%s}' \
+    "$(pf_esc "$pf_slug")" \
+    "$(pf_esc "$SHAPE")" \
+    "$(pf_esc "$SHAPE_REASON")" \
+    "$(pf_esc "$PURPOSE")" \
+    "$(pf_esc "$WORKING_DIR")" \
+    "$(pf_esc "$SRC_PREFIX")" \
+    "$(pf_esc "${INSTALL_CMD_VAL:-npm install}")" \
+    "$(pf_esc "$TEST_CMD")" \
+    "$(pf_esc "$BUILD_CMD")" \
+    "$(pf_esc "$MANIFEST_VARIANT")" \
+    "$IS_ESM" \
+    "$(pf_arr "${PF_CREATE[@]}")" \
+    "$(pf_arr "${PF_SKIP[@]}")" \
+    "$(pf_arr "${PF_WARN[@]}")")"
+  echo
+  echo "${c_bold}Preflight — no files written, no repo settings changed.${c_rst}"
+  if [ "${#PF_WARN[@]}" -gt 0 ]; then
+    echo
+    for w in "${PF_WARN[@]}"; do echo "  ${c_yel}warn${c_rst}  $w"; done
+  fi
+  echo
+  echo "<<<PREFLIGHT_JSON"
+  echo "$PF_JSON"
+  echo "PREFLIGHT_JSON>>>"
+  if [ -n "$PREFLIGHT_OUT" ]; then
+    printf '%s\n' "$PF_JSON" > "$PREFLIGHT_OUT"
+  fi
+  exit 0
+fi
 ni_read confirm "Proceed with creating the missing files above? [y/N] " "y"
 case "$confirm" in
   [yY]|[yY][eE][sS]) WRITE_FILES=true ;;
