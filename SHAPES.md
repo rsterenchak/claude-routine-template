@@ -16,7 +16,17 @@ back clean and onboarding writes the right workflows.
                                heading or `---`
 
   A section with no `**Template:**` line is labelled CLI, and its copyable value
-  is the first fenced code block. A section containing `least-proven` gets the
+  is the first fenced code block.
+
+    ### <variant-name>       → OPTIONAL. When a section contains `### ` blocks,
+                               render them as a segmented control inside the
+                               expanded row, each with its own fenced blocks.
+                               Sections with none render exactly as before.
+
+  Inside a variant, the FIRST fenced block is the scaffold command and the
+  SECOND (if present) is the edits to apply. Both get their own copy control.
+  Never put an inline `#` comment inside a fenced block — it copies with the
+  command. Comments belong in the prose around it. A section containing `least-proven` gets the
   warning glyph; one containing `**No shape exists.**` is dimmed and labelled
   NO SHAPE.
 
@@ -43,25 +53,32 @@ Bundled web app published to `gh-pages`. Angular, React, Vue, the PWA itself.
 
 **No template** — framework scaffolds are versioned and go stale, and the one
 setting that matters (`--base-href` / `--base`) is repo-name-specific and can't
-be baked in. Use the CLI.
+be baked in. Use the framework's own CLI.
 
-**Angular, from a Codespace.** Create the repo on GitHub first (empty, with a
-README so `main` exists), open a Codespace, then generate in place:
+Create the repo on GitHub first (empty, with a README so `main` exists), open a
+Codespace on it, then scaffold in place. Generating into the current directory
+avoids a subfolder that would push the config a level deep and leave every
+workflow carrying `working-directory: my-app`.
+
+**Onboarding adds:** `deploy.yml`, `test.yml`, a manifest generator.
+Pages source: `gh-pages`, root.
+
+### angular
+
+Install the CLI first if it isn't on the Codespace image — `npm install -g
+@angular/cli`. `--skip-git` because the Codespace is already a repo.
 
 ```bash
-npm install -g @angular/cli   # if ng isn't on the image
 ng new my-app --routing --style=css --directory . --skip-git
 ```
 
-`--directory .` avoids a subfolder that would push `angular.json` a level deep
-and leave every workflow carrying `working-directory: my-app`. `--skip-git`
-because the Codespace is already a repo.
-
-**Angular edits — apply BEFORE preflighting:**
+Angular is the fussiest of the three. `outputPath` flattens
+`dist/<project>/browser` to `dist/`, where `deploy.yml`'s publish dir and the
+manifest step both point. `--no-watch --browsers=ChromeHeadless` because
+`ng test` otherwise launches a real Chrome in watch mode and hangs CI.
 
 ```jsonc
-// angular.json — flatten dist/<project>/browser to dist/, where deploy.yml's
-// publish_dir and the manifest step both point.
+// angular.json
 "outputPath": { "base": "dist", "browser": "" }
 
 // package.json
@@ -69,31 +86,55 @@ because the Codespace is already a repo.
 "test:run": "ng test --no-watch --browsers=ChromeHeadless"
 ```
 
-**React (Vite)** is much less fussy — Vite already outputs to `dist/`, so there's
-no `outputPath` fight:
+### react
+
+Vite already outputs to `dist/`, so there's no `outputPath` fight. Run it in an
+empty directory — the scaffolder refuses a dirty one, so scaffold before adding
+anything else.
 
 ```bash
-npm create vite@latest my-app -- --template react
+npm create vite@latest . -- --template react
+npm install
+npm install -D vitest
 ```
 
 ```jsonc
+// package.json
 "build": "vite build --base=/my-app/",
 "test:run": "vitest run"
 ```
 
 `matchingGame-test` is a working reference for this shape.
 
-**Onboarding adds:** `deploy.yml`, `test.yml`, a manifest generator.
-Pages source: `gh-pages`, root.
+### vue
+
+`npm create vue@latest` is interactive — **choose Vitest** when it asks about
+unit testing, or there's no test gate and PRs auto-merge unchecked.
+
+```bash
+npm create vue@latest .
+npm install
+```
+
+```jsonc
+// package.json
+"build": "vite build --base=/my-app/",
+"test:run": "vitest run"
+```
+
+Vue's scaffolder writes its own `test:unit` script. Add `test:run` alongside it —
+detection prefers `test:run` over `test`, and leaving only `test:unit` means
+neither is found and the report falls back to `npm test`, which doesn't exist.
 
 **Gotchas**
 - Edit before preflighting. `test_command` is read straight from `package.json`,
-  so preflighting first bakes `npm test` into the report — and onboarding then
-  writes Angular's default `ng test` into `test.yml`, which launches a real
-  Chrome in watch mode and hangs CI. Files are never overwritten, so fixing it
-  means hand-editing `test.yml` or deleting and re-onboarding.
+  so preflighting first bakes the wrong command into the report — and onboarding
+  then writes it into `test.yml`. Files are never overwritten, so fixing it means
+  hand-editing `test.yml` or deleting and re-onboarding.
 - Preflight can NOT verify the `outputPath` edit. Today's Angular check fires on
   `angular.json` merely existing, not on anything being wrong. Read the file.
+- `--base-href` / `--base` must match the repo name. Project Pages serve from
+  `/<repo>/` and every framework hardcodes `/`, so assets 404 without it.
 - Add a `404.html` copy of `index.html` if the app routes — Pages has no SPA
   rewrite, so deep links 404 on refresh.
 - Commit the lockfile. `test.yml` uses `cache: npm` with
@@ -170,6 +211,9 @@ headless runner.
 **No template** — `dotnet new maui` generates a multi-target `.csproj`,
 `Platforms/` folders, XAML pages, and resource directories.
 
+The xUnit project is optional but recommended — without one there is no CI gate
+and PRs auto-merge with nothing checking them.
+
 ```bash
 dotnet workload install maui
 
@@ -177,7 +221,6 @@ dotnet new maui -n MyApp -o src/MyApp
 dotnet new sln -n MyApp
 dotnet sln add src/MyApp/MyApp.csproj
 
-# Optional but recommended — without a test project there is no CI gate.
 dotnet new xunit -o tests/MyApp.Tests
 dotnet add tests/MyApp.Tests reference src/MyApp
 dotnet sln add tests/MyApp.Tests/MyApp.Tests.csproj
