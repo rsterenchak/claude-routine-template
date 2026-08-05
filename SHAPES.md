@@ -1,106 +1,174 @@
-# Shape templates
+# Project shapes
 
-One GitHub template repository per shape `onboard.sh` resolves. Each is a
-**pre-onboard** project: real starter code, laid out so shape detection resolves
-correctly and preflight returns zero warnings — and nothing else. No `CLAUDE.md`,
-no `TODO.md`, no workflows. Those are what onboarding adds, and leaving them out
+How to start a repo for each shape `onboard.sh` resolves, so that preflight comes
+back clean and onboarding writes the right workflows.
+
+<!--
+  PARSING CONTRACT — the PWA's Repo setup picker reads this file live from
+  raw.githubusercontent.com and parses four markers. Reword them and the picker
+  degrades SILENTLY: rows render with missing chips and no gotchas, and nothing
+  errors. Adding a shape, by contrast, needs no client change at all.
+
+    ## <shape-name>          → one picker row (heading text is the row label)
+    **Template:** `owner/x`  → TEMPLATE chip + the copyable value
+    **Onboarding adds:**     → the chip list, up to the end of that paragraph
+    **Gotchas**              → the amber list; every `- ` bullet until the next
+                               heading or `---`
+
+  A section with no `**Template:**` line is labelled CLI, and its copyable value
+  is the first fenced code block. A section containing `least-proven` gets the
+  warning glyph; one containing `**No shape exists.**` is dimmed and labelled
+  NO SHAPE.
+
+  Prose outside these markers is free-form — only the four markers are load-
+  bearing, plus the `## ` heading level.
+-->
+
+Every `##` section below is one shape.
+
+Templates are **pre-onboard**: real starter code and nothing else. No `CLAUDE.md`,
+no `TODO.md`, no workflows — those are what onboarding adds, and leaving them out
 is what makes a fresh repo's preflight show a full `create[]` list.
 
-## Verified
+Two courses have no shape because the pipeline does not apply. **Version Control
+(D197)** is GitLab-based with screenshot deliverables. **UI Design / UX Design**
+onboard as `repo-only` and work fine, but the deliverables are wireframes and
+Figma files — the pipeline's value is code PRs, so expect little from it there.
 
-Every template below was run through the patched `onboard.sh` in preflight mode.
-Shape, derived commands, and warning count are actual output, not intent.
+---
 
-| Template | Shape | Test command | Warnings |
-|---|---|---|---|
-| `template-served-from-source` | served-from-source | `npm run test:run` | 0 |
-| `template-console` | console | `dotnet test` | 0 |
-| `template-desktop` | desktop | `dotnet test` | 0 |
-| `template-sql` | sql | none | 0 |
-| `template-repo-only` | repo-only | none | 0 |
+## build-pipeline
 
-## Setup
+Bundled web app published to `gh-pages`. Angular, React, Vue, the PWA itself.
 
-For each folder: create a repo, push it, then **Settings → check "Template
-repository"**. After that, "Use this template" creates a new repo you can
-preflight and onboard.
+**No template** — framework scaffolds are versioned and go stale, and the one
+setting that matters (`--base-href` / `--base`) is repo-name-specific and can't
+be baked in. Use the CLI.
 
-```bash
-cd template-console
-git remote add origin https://github.com/rsterenchak/template-console
-git push -u origin main
-gh repo edit rsterenchak/template-console --template
-```
-
-Keep them public or private to taste — onboarding works either way, but a
-private template still needs the Worker PAT to reach it.
-
-## The two shapes with no template here
-
-**build-pipeline (Angular).** A hand-written Angular app goes stale the moment
-the CLI ships a new version, and the one setting that matters — `--base-href
-/<repo>/` — is repo-name-specific and cannot be baked into a template. `ng new`
-generates ~30 files (`angular.json`, three tsconfigs, the `src/app/` tree, a
-pinned dependency graph); there is no useful way to start from another template
-and edit toward it. Use the CLI.
-
-### From a Codespace
-
-Create the repo on GitHub first — empty, with a README so `main` exists — then
-open a Codespace on it and generate in place:
+**Angular, from a Codespace.** Create the repo on GitHub first (empty, with a
+README so `main` exists), open a Codespace, then generate in place:
 
 ```bash
+npm install -g @angular/cli   # if ng isn't on the image
 ng new my-app --routing --style=css --directory . --skip-git
 ```
 
-`--directory .` matters: without it `ng new` makes a subfolder, `angular.json`
-lands one level deep, and every workflow ends up carrying
-`working-directory: my-app`. It still works, it is just noisier. `--skip-git`
-matters because the Codespace is already a git repo and `ng new` would try to
-init another one.
+`--directory .` avoids a subfolder that would push `angular.json` a level deep
+and leave every workflow carrying `working-directory: my-app`. `--skip-git`
+because the Codespace is already a repo.
 
-If `ng` is not on the Codespace image: `npm install -g @angular/cli`.
-
-Then apply the three edits below, commit, push, and Check from the PWA.
-
-### From a laptop
-
-```bash
-ng new my-app --routing --style=css
-cd my-app
-gh repo create rsterenchak/my-app --private --source=. --push
-```
-
-### The three edits, either way
+**Angular edits — apply BEFORE preflighting:**
 
 ```jsonc
-// angular.json — flatten dist/<project>/browser to dist/, which is where
-// deploy.yml's publish_dir and the manifest step both point.
+// angular.json — flatten dist/<project>/browser to dist/, where deploy.yml's
+// publish_dir and the manifest step both point.
 "outputPath": { "base": "dist", "browser": "" }
 
 // package.json
-"build": "ng build --base-href /<repo-name>/",
+"build": "ng build --base-href /my-app/",
 "test:run": "ng test --no-watch --browsers=ChromeHeadless"
 ```
 
-Plus a `404.html` copy of `index.html` if the app uses the router — GitHub Pages
-has no SPA rewrite, so deep links 404 on refresh.
+**React (Vite)** is much less fussy — Vite already outputs to `dist/`, so there's
+no `outputPath` fight:
 
-Preflight AFTER those edits, not before. Detection resolves `build-pipeline`
-either way (`angular.json` is a recognized bundler config), but the derived
-`test_command` comes straight from `package.json` — so a preflight run before
-the `test:run` edit bakes `npm test` into the report, and onboarding at that
-point would write Angular's default `ng test` into `test.yml`, which launches a
-real Chrome in watch mode and hangs CI. Existing files are never overwritten, so
-fixing it afterward means hand-editing `test.yml` or deleting and re-onboarding.
+```bash
+npm create vite@latest my-app -- --template react
+```
 
-Note also that preflight cannot verify the `outputPath` edit — today's Angular
-warning fires on `angular.json` merely existing, not on anything being wrong.
-Check that one by reading the file.
+```jsonc
+"build": "vite build --base=/my-app/",
+"test:run": "vitest run"
+```
 
-**maui.** `dotnet new maui` generates a multi-target `.csproj`, `Platforms/`
-folders, XAML pages, and resource directories — the same situation as Angular,
-where editing another template toward it means rebuilding a scaffold by hand.
+`matchingGame-test` is a working reference for this shape.
+
+**Onboarding adds:** `deploy.yml`, `test.yml`, a manifest generator.
+Pages source: `gh-pages`, root.
+
+**Gotchas**
+- Edit before preflighting. `test_command` is read straight from `package.json`,
+  so preflighting first bakes `npm test` into the report — and onboarding then
+  writes Angular's default `ng test` into `test.yml`, which launches a real
+  Chrome in watch mode and hangs CI. Files are never overwritten, so fixing it
+  means hand-editing `test.yml` or deleting and re-onboarding.
+- Preflight can NOT verify the `outputPath` edit. Today's Angular check fires on
+  `angular.json` merely existing, not on anything being wrong. Read the file.
+- Add a `404.html` copy of `index.html` if the app routes — Pages has no SPA
+  rewrite, so deep links 404 on refresh.
+- Commit the lockfile. `test.yml` uses `cache: npm` with
+  `cache-dependency-path`; without it `setup-node` fails before any test runs.
+
+---
+
+## served-from-source
+
+Static site with no build step. The files in the repo are the files the browser
+gets. Plain HTML/CSS/JS coursework.
+
+**Template:** `rsterenchak/template-served-from-source`
+
+**Onboarding adds:** `manifest.yml` (regenerates the source manifest and commits
+it to the repo root), `test.yml`. Pages source: `main`, root.
+
+**Gotchas**
+- The absence of a `build` script is what separates this from build-pipeline.
+  Add one and the repo becomes build-pipeline.
+- `"type": "module"` selects the `.cjs` manifest generator over the `.js` one.
+- Deleting `package.json` still resolves to served-from-source, but you lose the
+  test gate and PRs auto-merge with nothing checking them.
+- Ships with a `package-lock.json`. Keep it.
+
+---
+
+## console
+
+Cross-platform .NET console app. Software I, DSA practice, anything with a
+runnable `Main`.
+
+**Template:** `rsterenchak/template-console`
+
+**Onboarding adds:** `test.yml` (dotnet test on ubuntu), `manifest.yml`,
+`run-capture.yml`. Pages source: `main`, root (manifest only — no app deploy).
+
+**Gotchas**
+- **Exactly one `OutputType=Exe` project.** `run-capture.yml` auto-discovers the
+  single non-test runnable project; a second makes it ambiguous and the Capture
+  card returns nothing. New executables belong in new repos.
+- `.csproj`/`.sln` must be within two directories of the root or the repo isn't
+  detected as .NET at all and silently becomes `repo-only`.
+- Keep the `.sln` at the root so `WORKING_DIR` stays `.`.
+- `Microsoft.NET.Test.Sdk` is the marker that tells a test project from a
+  runnable one.
+
+---
+
+## desktop
+
+WinForms or WPF. Software II.
+
+**Template:** `rsterenchak/template-desktop`
+
+**Onboarding adds:** `test.yml` running on **windows-latest**, `manifest.yml`.
+No `run-capture.yml` — `dotnet run` on a GUI app opens a window and hangs a
+headless runner.
+
+**Gotchas**
+- `<UseWindowsForms>true</UseWindowsForms>` (or `<UseWPF>`, or a `net*-windows`
+  TFM) is the routing signal. Without it the repo resolves to `console` and
+  `dotnet build` fails on ubuntu — the Windows Desktop targeting packs ship with
+  the SDK only on Windows.
+- Keep testable logic out of the `Form`. CI can't instantiate one.
+- windows-latest is slower and costs more Actions minutes than console.
+
+---
+
+## maui
+
+.NET mobile. Mobile Application Development.
+
+**No template** — `dotnet new maui` generates a multi-target `.csproj`,
+`Platforms/` folders, XAML pages, and resource directories.
 
 ```bash
 dotnet workload install maui
@@ -109,54 +177,75 @@ dotnet new maui -n MyApp -o src/MyApp
 dotnet new sln -n MyApp
 dotnet sln add src/MyApp/MyApp.csproj
 
-# Optional but recommended — without a test project there is no CI gate,
-# and PRs auto-merge with nothing checking them.
+# Optional but recommended — without a test project there is no CI gate.
 dotnet new xunit -o tests/MyApp.Tests
 dotnet add tests/MyApp.Tests reference src/MyApp
 dotnet sln add tests/MyApp.Tests/MyApp.Tests.csproj
 ```
 
-`dotnet new xunit` brings in `Microsoft.NET.Test.Sdk`, which is the marker
-`test.yml` greps for to tell a test project from a runnable one.
+**Onboarding adds:** `test.yml` (MAUI Android build on ubuntu), `manifest.yml`.
+No Capture card — there's no runnable head.
 
-Keep testable logic out of the XAML code-behind, for the same reason the desktop
-template keeps it out of the `Form`: CI cannot instantiate a page.
+**Gotchas**
+- Detection routes on the `-android` / `-ios` / `-maccatalyst` TFMs, checked
+  **before** the desktop signal. That order is load-bearing: a MAUI multi-target
+  usually also lists `net*-windows`, which would otherwise send it to the
+  windows-latest workflow that can't build MAUI at all.
+- **Android head only.** iOS and Mac Catalyst can't build on ubuntu.
+- Keep logic out of the XAML code-behind, same reason as desktop.
+- **Least-proven shape in the pipeline.** `test-maui.yml` has never executed
+  against a real project. Onboard a throwaway and let CI run before a graded
+  repo depends on it — that also tells you whether workload-install-plus-build
+  time is tolerable given one entry at a time.
 
-Detection routes this on the `-android` / `-ios` / `-maccatalyst` target
-frameworks, checked **before** the desktop signal. That order matters — a MAUI
-multi-target usually also lists `net8.0-windows`, which would otherwise send the
-repo to the windows-latest workflow that cannot build MAUI at all.
+---
 
-Two things to expect:
+## sql
 
-- **Android head only.** The workflow installs the `maui-android` workload on
-  ubuntu; iOS and Mac Catalyst targets cannot build there.
-- **No Capture card.** Deliberate — there is no runnable head to `dotnet run`.
+Schema and migrations, no application code. Advanced Data Management.
 
-**This is the least-proven shape in the pipeline.** `test-maui.yml` has never
-executed against a real project. Onboard a throwaway first and let CI actually
-run before a graded repo depends on it — that run also tells you whether the
-workload-install-plus-build time is tolerable given one entry at a time.
+**Template:** `rsterenchak/template-sql`
 
-## What each template is shaped around
+**Onboarding adds:** `manifest.yml` running the generator in SQL mode, which
+publishes a table outline the Structure tab reads. No test workflow — nothing to
+run. Pages source: `main`, root.
 
-- **served-from-source** — `package.json` with a `test:run` and **no build
-  script**, plus a root `index.html`. The absent build script is what separates
-  this shape from build-pipeline. `"type": "module"` selects the `.cjs` manifest
-  generator.
-- **console** — exactly one `OutputType=Exe` project. `run-capture.yml`
-  auto-discovers the single non-test runnable project; a second one makes it
-  ambiguous and the Capture card returns nothing.
-- **desktop** — `<UseWindowsForms>true</UseWindowsForms>` routes to
-  windows-latest. Logic lives outside the `Form` so CI can test it headlessly.
-- **sql** — `.sql` files and no `package.json`. Conventional `CREATE TABLE`
-  statements so the Structure tab's SQL lens can parse a column outline.
-- **repo-only** — no `src/` directory, deliberately. A `src/` folder is read as a
-  web-source signal and would route the repo to served-from-source, which then
-  gets a Node `test.yml` it cannot satisfy.
+**Gotchas**
+- `.sql` files must be within four directories of the root.
+- Keep `CREATE TABLE` statements conventional so the SQL lens can parse them into
+  a column outline. Exotic DDL still runs, it just won't appear in the lens.
+- `.sql` at the repo root is the easy case — `srcPrefix` ends up blank and
+  matches the registry row. In a subfolder, both must be set to the same value.
 
-## Lockfiles
+---
 
-`template-served-from-source` ships a `package-lock.json`. Keep it. `test.yml`
-uses `cache: npm` with `cache-dependency-path`, and a missing lockfile fails
-`setup-node` before a single test runs.
+## repo-only
+
+Storage repo: notes, research, planning, write-ups. UI Design, UX Design,
+Software Design & QA.
+
+**Template:** `rsterenchak/template-repo-only`
+
+**Onboarding adds:** the routine, triage, and `TODO.md`. No test, deploy, or
+manifest.
+
+**Gotchas**
+- **Don't add a `src/` folder.** It's read as a web-source signal and routes the
+  repo to served-from-source, which then gets a Node `test.yml` it can't satisfy.
+  Use `notes/` or anything else.
+- No CI gate, so PRs auto-merge with no status check. Fine unless the repo has
+  branch protection requiring one.
+
+---
+
+## python
+
+**No shape exists.** A Python repo with `src/` trips the served-from-source rule
+and gets a Node `test.yml` it can't run.
+
+Until a shape is added, override to `repo-only` at the shape prompt and accept no
+CI gate — which is a real cost on algorithm code, where a test gate is worth the
+most.
+
+Adding it would mean: `pip install -r requirements.txt` / `pytest`, no build, no
+Pages, and a `.py` extension in the manifest generator.
