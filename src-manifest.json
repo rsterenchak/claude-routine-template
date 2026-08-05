@@ -3,5 +3,6 @@
   "srcRoot": "",
   "regions": [],
   "hasDom": false,
-  "lens": "doc"
+  "types": [],
+  "lens": "types"
 }
