@@ -654,8 +654,11 @@ if [ -n "$PREFLIGHT" ]; then
       PF_WARN+=("angular.json present — confirm outputPath flattens to dist/, build sets --base-href /<repo>/, and a test:run script exists (ng test defaults to Karma + real Chrome in watch mode)")
     fi
   fi
-  case "$SRC_PREFIX" in
-    "("*) PF_WARN+=("SRC_DIR not detected — the inject_targets srcPrefix will be wrong and the file picker will not resolve files") ;;
+  # repo-only legitimately has no source tree — the shape IS "no code". Warning
+  # about it there fires on every single repo-only preflight and means nothing.
+  case "$SHAPE:$SRC_PREFIX" in
+    repo-only:*) ;;
+    *:"("*) PF_WARN+=("SRC_DIR not detected — the inject_targets srcPrefix will be wrong and the file picker will not resolve files") ;;
   esac
   case "$TEST_CMD" in
     "("*) PF_WARN+=("no test script found — TEST_COMMAND falls back to npm test, which fails if no test script exists") ;;
@@ -683,8 +686,12 @@ if [ -n "$PREFLIGHT" ]; then
     *)                    pf_install="npm install";    pf_manifest="$MANIFEST_VARIANT" ;;
   esac
   # Repo slug straight from the clone, so this block is self-contained.
+  # `|| true` is load-bearing: line 40 sets `set -euo pipefail`, so a repo with
+  # no `origin` remote makes git exit 2, pipefail propagates it, and set -e
+  # kills the script mid-report. CI always clones so origin exists there, but a
+  # local preflight on a remote-less repo would abort with no output at all.
   pf_slug="$(git -C "$TARGET" remote get-url origin 2>/dev/null \
-    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
+    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##' || true)"
   PF_JSON="$(printf '{"repo":"%s","shape":"%s","shape_reason":"%s","purpose":"%s","working_dir":"%s","src_prefix":"%s","install_command":"%s","test_command":"%s","build_command":"%s","manifest_variant":"%s","is_esm":%s,"create":%s,"skip":%s,"warnings":%s}' \
     "$(pf_esc "$pf_slug")" \
     "$(pf_esc "$SHAPE")" \
