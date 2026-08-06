@@ -132,6 +132,30 @@ PREFLIGHT="${ONBOARD_PREFLIGHT:-}"
 PREFLIGHT_OUT="${ONBOARD_PREFLIGHT_OUT:-}"
 PF_CREATE=()
 PF_SKIP=()
+# Where a template file actually LANDS in the target repo. Almost everything is
+# repo-root relative and must stay that way: .github/workflows/* because GitHub
+# only reads workflows from the root, and CLAUDE.md / TODO.md / .claude/* because
+# the routine and the inject_targets row point at them there.
+#
+# scripts/gen-src-manifest.* is the exception. deploy.yml and manifest.yml both
+# run it as `node scripts/gen-src-manifest.js` under
+# `working-directory: $WORKING_DIR`, so on a repo whose project lives in a
+# subfolder the generator has to sit under that subfolder. Writing it to the repo
+# root instead fails the manifest step with "Cannot find module", and checking for
+# it at the root reports a create for a file that already exists one level down —
+# which is what made WeatherApp_TOP show a phantom missing file.
+dest_path_for() {
+  case "$1" in
+    scripts/gen-src-manifest.*)
+      if [ "$WORKING_DIR" = "." ] || [ -z "$WORKING_DIR" ]; then
+        printf '%s' "$1"
+      else
+        printf '%s/%s' "$WORKING_DIR" "$1"
+      fi
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 # Minimal JSON emitters — no jq dependency; values here are plain strings.
 pf_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 pf_arr() {
@@ -628,6 +652,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   # skip the non-chosen manifest variant entirely
   if [ "$dest_rel" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
   if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
+  dest_rel="$(dest_path_for "$dest_rel")"
   if [ -e "$TARGET/$dest_rel" ]; then
     echo "  ${c_yel}skip${c_rst}   $dest_rel  (already exists)"
     PF_SKIP+=("$dest_rel")
@@ -746,6 +771,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   # skip the non-chosen manifest variant
   if [ "$dest_rel" = "scripts/gen-src-manifest.js" ] && [ "$IS_ESM" = "true" ]; then continue; fi
   if [ "$dest_rel" = "scripts/gen-src-manifest.cjs" ] && [ "$IS_ESM" != "true" ]; then continue; fi
+  dest_rel="$(dest_path_for "$dest_rel")"
   dest="$TARGET/$dest_rel"
   if [ -e "$dest" ]; then
     skipped=$((skipped+1))
