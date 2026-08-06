@@ -82,10 +82,10 @@ ng new my-app --routing --style=css --directory . --skip-git
 
 **2 · Answer the prompts**
 
-| Prompt | Answer |
-|---|---|
-| Server-Side Rendering (SSR/SSG)? | **No** — it emits a `server/` build Pages can't run |
-| Which AI tools to configure? | **None** — it writes a `CLAUDE.md` onboarding would then skip |
+- Server-Side Rendering (SSR/SSG)? — **No**. It emits a `server/` build alongside
+  `browser/`, which Pages can't run and which breaks the `outputPath` flatten.
+- Which AI tools to configure? — **None**. It writes its own `CLAUDE.md`, and
+  onboarding never overwrites an existing file, so yours would be skipped.
 
 **3 · Edit `angular.json`** — inside `projects.<name>.architect.build.options`,
 beside `browser` and `tsConfig`
