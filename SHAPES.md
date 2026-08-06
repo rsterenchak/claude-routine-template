@@ -23,10 +23,15 @@ back clean and onboarding writes the right workflows.
                                expanded row, each with its own fenced blocks.
                                Sections with none render exactly as before.
 
-  Inside a variant, the FIRST fenced block is the scaffold command and the
-  SECOND (if present) is the edits to apply. Both get their own copy control.
-  Never put an inline `#` comment inside a fenced block — it copies with the
-  command. Comments belong in the prose around it. A section containing `least-proven` gets the
+  Inside a variant, the FIRST fenced block is the scaffold command and every
+  block after it is an edit block. Each gets its own copy control.
+
+    **File:** `path`         → line immediately before a fence, rendered as that
+                               block's label. Keeps the path OUT of the copied
+                               text.
+
+  Fenced blocks contain ONLY what should be pasted. No `#` or `//` comment naming
+  the file, no explanation — both copy with the code. Reasoning goes in Gotchas. A section containing `least-proven` gets the
   warning glyph; one containing `**No shape exists.**` is dimmed and labelled
   NO SHAPE.
 
@@ -65,44 +70,38 @@ Pages source: `gh-pages`, root.
 
 ### angular
 
-Install the CLI first if it isn't on the Codespace image — `npm install -g
-@angular/cli`. `--skip-git` because the Codespace is already a repo.
+**File:** `angular.json` → `projects.<name>.architect.build.options`
+
+```jsonc
+"outputPath": { "base": "dist", "browser": "" }
+```
+
+**File:** `package.json` → `scripts`
+
+```jsonc
+"build": "ng build --base-href /my-app/",
+"test:run": "ng test --no-watch"
+```
+
+**Scaffold** (empty repo)
 
 ```bash
 ng new my-app --routing --style=css --directory . --skip-git
 ```
 
-Angular is the fussiest of the three. `outputPath` flattens
-`dist/<project>/browser` to `dist/`, where `deploy.yml`'s publish dir and the
-manifest step both point. `--no-watch` because `ng test` watches by default and
-would hang CI.
-
-Angular 21 scaffolds the Vitest-based `@angular/build:unit-test` builder, not
-Karma. Do NOT pass `--browsers=ChromeHeadless` — it is a Karma flag and this
-builder rejects it. Verified against CLI 21.2.20 / Vitest 4.1.10.
-
-**`outputPath` goes in `angular.json`** at
-`projects.<name>.architect.build.options`, beside `browser` and `tsConfig`.
-**`build` and `test:run` go in `package.json`** under `scripts`. Putting a script
-string into `architect` overwrites the `test` target and every `ng` command then
-fails with `Skipping invalid target value; expected an object`.
-
-```jsonc
-// angular.json → projects.<name>.architect.build.options
-"outputPath": { "base": "dist", "browser": "" }
-```
-
-```jsonc
-// package.json → scripts
-"build": "ng build --base-href /my-app/",
-"test:run": "ng test --no-watch"
-```
+Run `npm install -g @angular/cli` first if `ng` is missing. Answer **No** to SSR
+and **None** to the AI-tools prompt.
 
 ### react
 
-Vite already outputs to `dist/`, so there's no `outputPath` fight. Run it in an
-empty directory — the scaffolder refuses a dirty one, so scaffold before adding
-anything else.
+**File:** `package.json` → `scripts`
+
+```jsonc
+"build": "vite build --base=/my-app/",
+"test:run": "vitest run"
+```
+
+**Scaffold** (empty repo)
 
 ```bash
 npm create vite@latest . -- --template react
@@ -110,41 +109,43 @@ npm install
 npm install -D vitest
 ```
 
+Vite already outputs to `dist/`, so there is no `outputPath` edit.
+`matchingGame-test` is a working reference.
+
+### vue
+
+**File:** `package.json` → `scripts`
+
 ```jsonc
-// package.json
 "build": "vite build --base=/my-app/",
 "test:run": "vitest run"
 ```
 
-`matchingGame-test` is a working reference for this shape.
-
-### vue
-
-`npm create vue@latest` is interactive — **choose Vitest** when it asks about
-unit testing, or there's no test gate and PRs auto-merge unchecked.
+**Scaffold** (empty repo)
 
 ```bash
 npm create vue@latest .
 npm install
 ```
 
-```jsonc
-// package.json
-"build": "vite build --base=/my-app/",
-"test:run": "vitest run"
-```
-
-Vue's scaffolder writes its own `test:unit` script. Add `test:run` alongside it —
-detection prefers `test:run` over `test`, and leaving only `test:unit` means
-neither is found and the report falls back to `npm test`, which doesn't exist.
+Interactive — choose **Vitest** when asked, or there is no test gate. Vue writes
+its own `test:unit`; add `test:run` alongside it, since detection looks for
+`test:run` then `test:ci` then `test`.
 
 **Gotchas**
-- Edit before preflighting. `test_command` is read straight from `package.json`,
-  so preflighting first bakes the wrong command into the report — and onboarding
-  then writes it into `test.yml`. Files are never overwritten, so fixing it means
-  hand-editing `test.yml` or deleting and re-onboarding.
-- Preflight can NOT verify the `outputPath` edit. Today's Angular check fires on
-  `angular.json` merely existing, not on anything being wrong. Read the file.
+- **Apply the edits before preflighting.** `test_command` is read straight from
+  `package.json`, so preflighting first bakes the wrong command into the report,
+  and onboarding writes it into `test.yml`. Files are never overwritten, so fixing
+  it means hand-editing `test.yml` or deleting and re-onboarding.
+- **Put each edit in the file its label names.** A `scripts` entry pasted into
+  `angular.json` overwrites the `test` target, and every `ng` command then fails
+  with `Skipping invalid target value; expected an object`.
+- **Angular 21 uses Vitest, not Karma.** `--browsers=ChromeHeadless` is a Karma
+  flag and `@angular/build:unit-test` rejects it. `--no-watch` is the single-run
+  flag. Verified on CLI 21.2.20 / Vitest 4.1.10.
+- **Preflight cannot verify these edits.** Its Angular warning fires on
+  `angular.json` merely existing, so it reads identically on a correct repo and a
+  broken one. Only a deploy that renders proves `outputPath`.
 - `--base-href` / `--base` must match the repo name. Project Pages serve from
   `/<repo>/` and every framework hardcodes `/`, so assets 404 without it.
 - Add a `404.html` copy of `index.html` if the app routes — Pages has no SPA
