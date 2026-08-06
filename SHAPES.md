@@ -235,35 +235,85 @@ headless runner.
 **No template** — `dotnet new maui` generates a multi-target `.csproj`,
 `Platforms/` folders, XAML pages, and resource directories.
 
-The xUnit project is optional but recommended — without one there is no CI gate
-and PRs auto-merge with nothing checking them.
+**1 · Install the workload** — on Linux and Codespaces this is `maui-android`,
+NOT `maui`. The `maui` meta-workload is Windows/macOS only and fails with
+"Workload ID maui isn't supported on this platform". `maui-android` brings the
+build tools, the Android libraries, and the project templates.
 
 ```bash
-dotnet workload install maui
+dotnet workload install maui-android
+```
 
+**2 · Scaffold** — into `src/`, so the solution has somewhere to sit
+
+```bash
 dotnet new maui -n MyApp -o src/MyApp
-dotnet new sln -n MyApp
-dotnet sln add src/MyApp/MyApp.csproj
+```
 
+**3 · Create the solution** — `--format sln` is required
+
+```bash
+dotnet new sln -n MyApp --format sln
+dotnet sln add src/MyApp/MyApp.csproj
+```
+
+**4 · Add a class library for testable logic** — a test project cannot reference
+the MAUI project directly (`net10.0` vs `net10.0-android`, "incompatible targeted
+frameworks"). A plain `net10.0` library both can reference is the way through,
+and it forces logic out of the XAML code-behind, which CI cannot instantiate
+anyway.
+
+```bash
+dotnet new classlib -o src/MyApp.Core
+dotnet sln add src/MyApp.Core/MyApp.Core.csproj
+dotnet add src/MyApp reference src/MyApp.Core
+```
+
+**5 · Add the test project** — without one there is no CI gate and PRs auto-merge
+with nothing checking them
+
+```bash
 dotnet new xunit -o tests/MyApp.Tests
-dotnet add tests/MyApp.Tests reference src/MyApp
+dotnet add tests/MyApp.Tests reference src/MyApp.Core
 dotnet sln add tests/MyApp.Tests/MyApp.Tests.csproj
 ```
 
+Put something real in `MyApp.Core` and test it. `dotnet new xunit` scaffolds an
+empty `[Fact]` that passes trivially and proves nothing about whether the gate
+runs. Verify locally with `dotnet test` before pushing — note that builds only
+the library and the tests, not the Android head, so a green local run does not
+predict a green CI run.
+
+**6 · Ignore build output**
+
+```bash
+printf 'bin/\nobj/\n' > .gitignore
+```
+
+**7 · Commit and push**, then Check from the app.
+
 **Onboarding adds:** `test.yml` (MAUI Android build on ubuntu), `manifest.yml`.
-No Capture card — there's no runnable head.
+No Capture card — there is no runnable head.
 
 **Gotchas**
-- Detection routes on the `-android` / `-ios` / `-maccatalyst` TFMs, checked
-  **before** the desktop signal. That order is load-bearing: a MAUI multi-target
-  usually also lists `net*-windows`, which would otherwise send it to the
-  windows-latest workflow that can't build MAUI at all.
-- **Android head only.** iOS and Mac Catalyst can't build on ubuntu.
-- Keep logic out of the XAML code-behind, same reason as desktop.
+- **`dotnet new sln` defaults to `.slnx` on SDK 10.** `onboard.sh` and `test.yml`
+  both locate the solution with `find -maxdepth 2 -name '*.sln'`, which does not
+  match `.slnx`. Without `--format sln` the solution is invisible: `WORKING_DIR`
+  falls back to whichever `.csproj` is found first — arbitrary between `src/` and
+  `tests/` — and `test.yml` builds `.` instead of the solution. Applies to every
+  .NET shape, not just maui.
+- **Three projects, not two.** The class library exists because a `net10.0` test
+  project cannot reference a `net10.0-android` app — `dotnet add reference` fails
+  with "incompatible targeted frameworks". Anything worth testing lives in the
+  library; the MAUI project keeps only the UI.
+- **Detection routes on the `-android` / `-ios` / `-maccatalyst` TFMs**, checked
+  BEFORE the desktop signal. That order is load-bearing: a MAUI multi-target
+  usually also lists `net*-windows`, which would otherwise send the repo to the
+  windows-latest workflow that cannot build MAUI at all.
+- **Android head only.** iOS and Mac Catalyst cannot build on ubuntu.
+- **Keep logic out of the XAML code-behind.** CI cannot instantiate a page.
 - **Least-proven shape in the pipeline.** `test-maui.yml` has never executed
-  against a real project. Onboard a throwaway and let CI run before a graded
-  repo depends on it — that also tells you whether workload-install-plus-build
-  time is tolerable given one entry at a time.
+  against a real project.
 
 ---
 
