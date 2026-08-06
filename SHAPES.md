@@ -26,12 +26,15 @@ back clean and onboarding writes the right workflows.
   Inside a variant, the FIRST fenced block is the scaffold command and every
   block after it is an edit block. Each gets its own copy control.
 
-    **File:** `path`         → line immediately before a fence, rendered as that
-                               block's label. Keeps the path OUT of the copied
-                               text.
+    **N · Label** ...        → bold line immediately before a fence, rendered as
+                               that block's caption. Everything after the bold
+                               run is caption detail. Keeps the file path and the
+                               explanation OUT of the copied text.
 
-  Fenced blocks contain ONLY what should be pasted. No `#` or `//` comment naming
-  the file, no explanation — both copy with the code. Reasoning goes in Gotchas. A section containing `least-proven` gets the
+  Variants read as a numbered sequence, in the order the user performs them.
+  Fenced blocks contain ONLY what should be pasted — no `#` or `//` comment naming
+  the file, no explanation, both of which copy with the code. Reasoning goes in
+  Gotchas; step-specific detail goes in the caption line. A section containing `least-proven` gets the
   warning glyph; one containing `**No shape exists.**` is dimmed and labelled
   NO SHAPE.
 
@@ -70,38 +73,39 @@ Pages source: `gh-pages`, root.
 
 ### angular
 
-**File:** `angular.json` → `projects.<name>.architect.build.options`
+**1 · Scaffold** — in the empty repo, both lines
+
+```bash
+npm install -g @angular/cli
+ng new my-app --routing --style=css --directory . --skip-git
+```
+
+**2 · Answer the prompts**
+
+| Prompt | Answer |
+|---|---|
+| Server-Side Rendering (SSR/SSG)? | **No** — it emits a `server/` build Pages can't run |
+| Which AI tools to configure? | **None** — it writes a `CLAUDE.md` onboarding would then skip |
+
+**3 · Edit `angular.json`** — inside `projects.<name>.architect.build.options`,
+beside `browser` and `tsConfig`
 
 ```jsonc
 "outputPath": { "base": "dist", "browser": "" }
 ```
 
-**File:** `package.json` → `scripts`
+**4 · Edit `package.json`** — inside `scripts`, beside the existing `test`
 
 ```jsonc
 "build": "ng build --base-href /my-app/",
 "test:run": "ng test --no-watch"
 ```
 
-**Scaffold** (empty repo)
-
-```bash
-ng new my-app --routing --style=css --directory . --skip-git
-```
-
-Run `npm install -g @angular/cli` first if `ng` is missing. Answer **No** to SSR
-and **None** to the AI-tools prompt.
+**5 · Commit and push**, then Check from the app.
 
 ### react
 
-**File:** `package.json` → `scripts`
-
-```jsonc
-"build": "vite build --base=/my-app/",
-"test:run": "vitest run"
-```
-
-**Scaffold** (empty repo)
+**1 · Scaffold** — in the empty repo
 
 ```bash
 npm create vite@latest . -- --template react
@@ -109,28 +113,35 @@ npm install
 npm install -D vitest
 ```
 
-Vite already outputs to `dist/`, so there is no `outputPath` edit.
-`matchingGame-test` is a working reference.
-
-### vue
-
-**File:** `package.json` → `scripts`
+**2 · Edit `package.json`** — inside `scripts`
 
 ```jsonc
 "build": "vite build --base=/my-app/",
 "test:run": "vitest run"
 ```
 
-**Scaffold** (empty repo)
+Vite already outputs to `dist/`, so there is no `angular.json` equivalent to edit.
+`matchingGame-test` is a working reference.
+
+### vue
+
+**1 · Scaffold** — in the empty repo. Interactive: choose **Vitest** when asked
+about unit testing, or there is no test gate.
 
 ```bash
 npm create vue@latest .
 npm install
 ```
 
-Interactive — choose **Vitest** when asked, or there is no test gate. Vue writes
-its own `test:unit`; add `test:run` alongside it, since detection looks for
-`test:run` then `test:ci` then `test`.
+**2 · Edit `package.json`** — inside `scripts`
+
+```jsonc
+"build": "vite build --base=/my-app/",
+"test:run": "vitest run"
+```
+
+Vue writes its own `test:unit`. Add `test:run` alongside it rather than renaming —
+detection looks for `test:run`, then `test:ci`, then `test`.
 
 **Gotchas**
 - **Apply the edits before preflighting.** `test_command` is read straight from
