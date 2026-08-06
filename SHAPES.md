@@ -74,16 +74,28 @@ ng new my-app --routing --style=css --directory . --skip-git
 
 Angular is the fussiest of the three. `outputPath` flattens
 `dist/<project>/browser` to `dist/`, where `deploy.yml`'s publish dir and the
-manifest step both point. `--no-watch --browsers=ChromeHeadless` because
-`ng test` otherwise launches a real Chrome in watch mode and hangs CI.
+manifest step both point. `--no-watch` because `ng test` watches by default and
+would hang CI.
+
+Angular 21 scaffolds the Vitest-based `@angular/build:unit-test` builder, not
+Karma. Do NOT pass `--browsers=ChromeHeadless` — it is a Karma flag and this
+builder rejects it. Verified against CLI 21.2.20 / Vitest 4.1.10.
+
+**`outputPath` goes in `angular.json`** at
+`projects.<name>.architect.build.options`, beside `browser` and `tsConfig`.
+**`build` and `test:run` go in `package.json`** under `scripts`. Putting a script
+string into `architect` overwrites the `test` target and every `ng` command then
+fails with `Skipping invalid target value; expected an object`.
 
 ```jsonc
-// angular.json
+// angular.json → projects.<name>.architect.build.options
 "outputPath": { "base": "dist", "browser": "" }
+```
 
-// package.json
+```jsonc
+// package.json → scripts
 "build": "ng build --base-href /my-app/",
-"test:run": "ng test --no-watch --browsers=ChromeHeadless"
+"test:run": "ng test --no-watch"
 ```
 
 ### react
