@@ -1342,9 +1342,24 @@ if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
     -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" 2>/dev/null || echo "")
   if printf '%s' "$reg_existing" | grep -q '"id"'; then
     echo "  ${c_dim}already registered${c_rst} $REPO_FOR_GH is already an inject target — leaving it as-is"
+    # The row is NOT updated on re-onboard: overwriting purpose here would let a
+    # re-run answered "personal" silently flip an assignment repo. Surface the
+    # mismatch instead so it can be corrected deliberately.
+    reg_purpose=$(curl -sS \
+      "$reg_base/rest/v1/inject_targets?select=purpose&repo=eq.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
+      -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+      -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" 2>/dev/null \
+      | sed -n 's/.*"purpose"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [ -n "$reg_purpose" ] && [ "$reg_purpose" != "$PURPOSE" ]; then
+      echo "  ${c_yel}note${c_rst}   registry row says purpose '$reg_purpose' but this run said '$PURPOSE' — update the row if the run is right"
+    fi
   else
-    reg_payload=$(printf '{"user_id":"%s","nickname":"%s","repo":"%s","file_path":"TODO.md","src_prefix":"%s","shape":"%s","enabled":true}' \
-      "$ONBOARD_USER_ID" "$reg_nickname" "$REPO_FOR_GH" "$reg_src_prefix" "$SHAPE")
+    # purpose rides along so consumers that cannot ask the user — the row-level
+    # drift check in the app, which has only the registry row to go on — know
+    # whether to expect the five assignment-purpose files. Without it that check
+    # assumes personal and undercounts every assignment repo by exactly five.
+    reg_payload=$(printf '{"user_id":"%s","nickname":"%s","repo":"%s","file_path":"TODO.md","src_prefix":"%s","shape":"%s","purpose":"%s","enabled":true}' \
+      "$ONBOARD_USER_ID" "$reg_nickname" "$REPO_FOR_GH" "$reg_src_prefix" "$SHAPE" "$PURPOSE")
     reg_status=$(curl -sS -o /dev/null -w '%{http_code}' \
       -X POST "$reg_base/rest/v1/inject_targets" \
       -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
@@ -1353,7 +1368,7 @@ if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
       -H "Prefer: return=minimal" \
       -d "$reg_payload" 2>/dev/null || echo "000")
     if [ "$reg_status" = "201" ] || [ "$reg_status" = "200" ] || [ "$reg_status" = "204" ]; then
-      echo "  ${c_grn}registered${c_rst} $REPO_FOR_GH in inject_targets (shape: $SHAPE, enabled)"
+      echo "  ${c_grn}registered${c_rst} $REPO_FOR_GH in inject_targets (shape: $SHAPE, purpose: $PURPOSE, enabled)"
     else
       echo "  ${c_red}FAILED${c_rst} registry insert returned HTTP $reg_status — add the target manually in the app"
     fi
