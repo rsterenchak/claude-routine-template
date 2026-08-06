@@ -675,8 +675,36 @@ if [ -n "$PREFLIGHT" ]; then
     if [ ! -f "$WD_ABS/package-lock.json" ]; then
       PF_WARN+=("no package-lock.json in ${WORKING_DIR} — test.yml sets cache: npm with cache-dependency-path, so setup-node fails the job before any test runs")
     fi
+    # Angular: check the three conditions rather than warning on the file's mere
+    # existence. The old presence-based warning fired on every Angular repo
+    # including correctly-configured ones, so it read identically on a working
+    # repo and a broken one and taught nothing. Each condition now warns only
+    # when it actually fails, and a correct Angular repo warns not at all.
+    #
+    # Grep rather than jq: jq is not guaranteed on a dev machine, and these are
+    # narrow, high-signal patterns. A missed edge case costs a false clean on one
+    # condition, which is the same cost the old warning had on all three.
     if [ -f "$WD_ABS/angular.json" ]; then
-      PF_WARN+=("angular.json present — confirm outputPath flattens to dist/, build sets --base-href /<repo>/, and a test:run script exists (ng test defaults to Karma + real Chrome in watch mode)")
+      # deploy.yml hardcodes publish_dir <wd>/dist and the manifest step writes
+      # there too. Angular 17+ emits dist/<project>/browser unless outputPath is
+      # flattened, so Pages publishes a directory holding only a subfolder.
+      if ! grep -qE '"browser"[[:space:]]*:[[:space:]]*""' "$WD_ABS/angular.json" 2>/dev/null; then
+        PF_WARN+=("angular.json outputPath is not flattened — set \"outputPath\": { \"base\": \"dist\", \"browser\": \"\" } in projects.<name>.architect.build.options, or deploy.yml publishes an empty dist/")
+      fi
+      if [ -n "$PKG" ]; then
+        # Project Pages serve from /<repo>/ and Angular hardcodes /, so every
+        # asset request goes to the domain root and 404s without --base-href.
+        if ! grep -q -- '--base-href' "$PKG" 2>/dev/null; then
+          PF_WARN+=("package.json build script has no --base-href — Pages serves this repo from /<repo>/ and Angular hardcodes /, so assets 404")
+        fi
+        # ng test watches by default and would hang CI until the job times out.
+        # Angular 21 uses the Vitest-based @angular/build:unit-test builder, so
+        # --no-watch is the flag; --browsers=ChromeHeadless is Karma-only and is
+        # rejected by this builder.
+        if ! grep -qE '"test:run"[[:space:]]*:' "$PKG" 2>/dev/null; then
+          PF_WARN+=("no test:run script — add \"test:run\": \"ng test --no-watch\", or detection falls back to ng test which watches and hangs CI")
+        fi
+      fi
     fi
   fi
   # repo-only legitimately has no source tree — the shape IS "no code". Warning
