@@ -312,8 +312,12 @@ No Capture card — there is no runnable head.
   windows-latest workflow that cannot build MAUI at all.
 - **Android head only.** iOS and Mac Catalyst cannot build on ubuntu.
 - **Keep logic out of the XAML code-behind.** CI cannot instantiate a page.
-- **Least-proven shape in the pipeline.** `test-maui.yml` has never executed
-  against a real project.
+- **Verified end to end** on `test-maui`: preflight resolved `maui` (not desktop),
+  `test.yml` built the Android head for `net10.0-android` and passed 2/2 xUnit,
+  and the run uploaded an 84MB APK artifact. Total wall clock 2m48s — slow next
+  to console's 21s, so expect a wait per entry. The workflow auto-discovers the
+  MAUI project and reads the exact `-android` TFM from the csproj, so nothing is
+  hardcoded to a .NET version.
 
 ---
 
