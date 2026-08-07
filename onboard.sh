@@ -308,11 +308,16 @@ IS_DOTNET="false"
 IS_DESKTOP="false"
 IS_MAUI="false"
 DOTNET_PROJ=""
-if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | grep -q .; then
+# `.slnx` is the XML solution format and the DEFAULT for `dotnet new sln` on
+# SDK 10, so a repo scaffolded today has one unless --format sln was passed.
+# `-name '*.sln'` does not match it; without this a solution is invisible,
+# WORKING_DIR falls back to whichever .csproj is found first (arbitrary between
+# src/ and tests/), and the test workflow builds `.` instead of the solution.
+if find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' -o -name '*.slnx' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | grep -q .; then
   IS_DOTNET="true"
-  DOTNET_PROJ="$(find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
+  DOTNET_PROJ="$(find "$TARGET" -maxdepth 2 \( -name '*.csproj' -o -name '*.sln' -o -name '*.slnx' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
   # Working dir = where the .sln lives, else where the first .csproj lives.
-  sln="$(find "$TARGET" -maxdepth 2 -name '*.sln' -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
+  sln="$(find "$TARGET" -maxdepth 2 \( -name '*.sln' -o -name '*.slnx' \) -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | head -1)"
   anchor="${sln:-$DOTNET_PROJ}"
   WORKING_DIR="$(dirname "${anchor#$TARGET/}")"
   [ "$WORKING_DIR" = "$TARGET" ] && WORKING_DIR="."
