@@ -918,8 +918,12 @@ if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]
   # srcPrefix sans trailing slash, so emitted paths start with that prefix —
   # which is what makes the worker resolve them for chat attachment.
   MANIFEST_SRC_ROOT_VAL="${SRC_PREFIX%/}"
-  ni_read IN_DOTNET "  .NET SDK version [8.0.x]: " "${ONBOARD_DOTNET:-}"
-  DOTNET_VERSION_VAL="${IN_DOTNET:-8.0.x}"
+  # .NET 8 and 9 both reach end of support on 2026-11-10; .NET 10 is the current
+  # LTS (through Nov 2028) and is what the runner images and Codespaces ship, so
+  # it is also what `dotnet new` produces. Defaulting to 8.0.x pinned coursework
+  # to a runtime going unsupported mid-degree.
+  ni_read IN_DOTNET "  .NET SDK version [10.0.x]: " "${ONBOARD_DOTNET:-}"
+  DOTNET_VERSION_VAL="${IN_DOTNET:-10.0.x}"
 elif [ "$SHAPE" = "sql" ]; then
   # SQL schema/migrations repo — no build pipeline, but it publishes a manifest
   # (sql mode). MANIFEST_SRC_ROOT scopes the .sql walk; blank for a repo whose

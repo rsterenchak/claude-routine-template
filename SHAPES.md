@@ -296,6 +296,11 @@ printf 'bin/\nobj/\n' > .gitignore
 No Capture card — there is no runnable head.
 
 **Gotchas**
+- **Target `net10.0`.** .NET 8 and 9 both reach end of support on 2026-11-10;
+  .NET 10 is the current LTS through Nov 2028 and is what the runner images,
+  Codespaces, and `dotnet new` all produce. The templates and the onboarding
+  default were moved off `net8.0` for this reason. A rubric that specifies a
+  framework version overrides this.
 - **`dotnet new sln` defaults to `.slnx` on SDK 10.** `onboard.sh` and `test.yml`
   both locate the solution with `find -maxdepth 2 -name '*.sln'`, which does not
   match `.slnx`. Without `--format sln` the solution is invisible: `WORKING_DIR`
