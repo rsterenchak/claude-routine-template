@@ -38,14 +38,14 @@ jobs:
       - name: Restore
         working-directory: {{WORKING_DIR}}
         run: |
-          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          TARGET=$(find . -maxdepth 2 \( -name '*.sln' -o -name '*.slnx' \) | head -1)
           echo "Restoring ${TARGET:-.}"
           dotnet restore "${TARGET:-.}"
 
       - name: Build
         working-directory: {{WORKING_DIR}}
         run: |
-          TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+          TARGET=$(find . -maxdepth 2 \( -name '*.sln' -o -name '*.slnx' \) | head -1)
           echo "Building ${TARGET:-.}"
           dotnet build "${TARGET:-.}" --no-restore --configuration Release
 
@@ -53,7 +53,7 @@ jobs:
         working-directory: {{WORKING_DIR}}
         run: |
           if find . -name '*.csproj' -print0 | xargs -0 grep -l -i 'Microsoft.NET.Test.Sdk' 2>/dev/null | grep -q .; then
-            TARGET=$(find . -maxdepth 2 -name '*.sln' | head -1)
+            TARGET=$(find . -maxdepth 2 \( -name '*.sln' -o -name '*.slnx' \) | head -1)
             echo "Test project detected — running dotnet test on ${TARGET:-.}"
             dotnet test "${TARGET:-.}" --configuration Release --verbosity normal
           else
