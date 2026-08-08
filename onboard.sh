@@ -649,6 +649,23 @@ if [ "$PURPOSE" = "assignment" ]; then
     "commenting-style.md>.claude/commenting-style.md"
     "style.md>.claude/style.md"
   )
+else
+  # A personal repo's brief is project.md — the same role assignment.md plays on
+  # coursework, minus the rubric: the app's Coverage tab reads it and the derive
+  # pass proposes backlog entries from it. Its `## Goals` section is the gate the
+  # tab classifies on, exactly as `## Requirements` gates assignment.md.
+  #
+  # docs/mockups/ is scaffolded with a README rather than left to appear on first
+  # use, because git cannot track an empty directory and the convention is only
+  # useful if the path is the same across every repo. The README is the folder
+  # marker AND the explanation — what belongs there (HTML/SVG, not screenshots,
+  # since a run can read markup but not a PNG) and the rule that keeps it honest:
+  # delete a mockup once its surface ships, because a stale one is worse than
+  # none. project.md's Surfaces section references these files by path.
+  TEMPLATE_FILES+=(
+    "project.md"
+    "mockups-README.md>docs/mockups/README.md"
+  )
 fi
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
@@ -1460,6 +1477,14 @@ EOF
 # Step 6: style docs — assignment repos only. The scaffolded style.md describes
 # the owner's conventions generically; a repo in a language it doesn't cover
 # wants a section adding, and routine-base.md's step 3 reads whatever is there.
+if [ "$PURPOSE" != "assignment" ]; then
+  cat <<EOF
+  6. Fill in project.md — at minimum the \`## Goals\` section, which is what the
+     Coverage tab classifies on and what the derive pass reads. Surfaces and
+     Look and feel matter most on a UI-first project; commit approved mockups to
+     docs/mockups/ as HTML or SVG so a run can read them.
+EOF
+fi
 if [ "$PURPOSE" = "assignment" ]; then
   cat <<EOF
   6. Review the scaffolded style docs in .claude/ — style.md (naming, structure,
