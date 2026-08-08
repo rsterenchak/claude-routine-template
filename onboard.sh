@@ -665,6 +665,8 @@ else
   TEMPLATE_FILES+=(
     "project.md"
     "mockups-README.md>docs/mockups/README.md"
+    ".claude/project-derive.md"
+    ".github/workflows/claude-derive.yml"
   )
 fi
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
@@ -984,6 +986,7 @@ PLACEHOLDER_FILES=(
   ".claude/routine.md"
   ".claude/triage.md"
   ".claude/derive.md"
+  ".claude/project-derive.md"
   ".github/workflows/test.yml"
 )
 # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
