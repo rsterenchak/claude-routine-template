@@ -187,7 +187,6 @@ Robert's automation parses these, so the format is exact, not stylistic:
   - Type: <bug|feature>
   - Description: 2-4 concrete sentences — what to build, the expected behavior, and the likely code locations (name real functions/files you found).
   - File: `{{SRC_DIR}}<file>`, `{{SRC_DIR}}<file>`
-  - Completed: YYYY-MM-DD (PR #<number>)
 ```
 
 Rules:
@@ -198,6 +197,12 @@ Rules:
 - File paths full and repo-relative — `{{SRC_DIR}}<file>`, never a bare filename.
   Source under `{{SRC_DIR}}`, tests under `{{TEST_DIR}}`. On an empty repo the
   file does not exist yet; name the path it will be created at.
+- Do NOT write a `- Completed:` sub-bullet. The routine records completion by
+  appending ` — Completed: YYYY-MM-DD (PR #N)` to the entry's TITLE line when it
+  ships (see routine-base.md step 3), so a sub-bullet is never filled in — it
+  just sits in TODO.md as a literal `YYYY-MM-DD (PR #<number>)` placeholder
+  forever. There are already two of those in toDoList_TOP's backlog from drafts
+  that followed an earlier version of this spec.
 - Do NOT invent an `<!-- id -->` marker — the app assigns it when Robert accepts.
 - Follow this repo's `CLAUDE.md` conventions AND the brief's `## Constraints`.
   Only mention a constraint that's actually relevant.
