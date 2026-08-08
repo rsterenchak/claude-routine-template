@@ -71,6 +71,29 @@ workflow carrying `working-directory: my-app`.
 **Onboarding adds:** `deploy.yml`, `test.yml`, a manifest generator.
 Pages source: `gh-pages`, root.
 
+### vanilla
+
+Plain JS with a bundler — the setup `toDoList_TOP` uses, minus the parts that are
+project decisions. The only build-pipeline variant with a template, because there
+is no CLI that scaffolds this.
+
+**1 · Use this template**
+
+```
+rsterenchak/template-vanilla-webpack
+```
+
+**2 · Push, then Check from the app.** There is no edit step. `webpack.config.js`
+sets `publicPath: 'auto'`, which derives the base URL from the script's own
+location at runtime, so the bundle works at `https://<user>.github.io/<repo>/`
+with the repo name nowhere in the config — unlike Angular's `--base-href` and
+Vite's `--base`, which are edited per repo and silently break every asset when
+forgotten.
+
+Leaves out the service worker, favicons and web manifest, `dotenv` +
+`DefinePlugin`, and the `gh-pages` CLI — each a dependency and a project
+decision. The template's README says what to add and when.
+
 ### angular
 
 **1 · Scaffold** — in the empty repo, both lines
