@@ -28,6 +28,34 @@
 
 - 
 
+## Surfaces
+
+<!-- For a UI-first project this is the real scope — the screens, panes, sheets,
+     and cards the thing is made of. Name each one and say in a line what it is
+     for. Derive reads these as buildable units, so a surface named here is a
+     proposal it can make; one you only ever described in chat is not.
+
+     Reference a committed mockup by path where one exists (see the note under
+     Look and feel). "As in docs/mockups/queue-rail.html" is worth more than a
+     paragraph describing the same layout, because derive can read the file. -->
+
+- 
+
+## Look and feel
+
+<!-- Optional but valuable on a UI-first project. The visual direction: palette,
+     type, density, the two or three decisions everything else follows from.
+
+     Keep it short and move it OUT once it settles — established design tokens
+     belong in CLAUDE.md as conventions, and duplicating them here means two
+     places to update and one of them going stale. This section is where the
+     direction gets DECIDED, not where it lives forever.
+
+     Commit mockups rather than describing them. An HTML or SVG mockup saved to
+     docs/mockups/ is something derive can read, the code viewer can render, and
+     a later run can be held against — a mockup that only ever existed in a chat
+     is a decision the repo cannot see. -->
+
 ## Constraints
 
 <!-- Recommended. Boundaries the work has to respect: a platform, a dependency you
