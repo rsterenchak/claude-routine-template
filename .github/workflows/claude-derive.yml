@@ -68,9 +68,31 @@ jobs:
             You are running the autonomous-agent DERIVE pass for this repository.
             Project id: ${{ inputs.project_id }}
 
-            Read `.claude/derive.md` from the repository and execute it exactly as
-            written, for the project id above. It defines how to read this repo's
-            `assignment.md`, enumerate the rubric's aspects, check which are
-            already covered, and write a proposal (or a clarifying question) row
-            back to Supabase for each uncovered aspect. Complete the whole pass,
-            then exit with the one-paragraph summary the routine specifies.
+            This repo carries EXACTLY ONE brief document, and which one decides
+            which routine you run. Check for them in this order and stop at the
+            first that exists:
+
+            1. `assignment.md` at the repo root — coursework. Read
+               `.claude/derive.md` and execute it exactly as written. It defines
+               how to read the spec, enumerate the rubric's aspects, check which
+               are already covered, and write a proposal (or a clarifying
+               question) row back to Supabase for each uncovered aspect.
+
+            2. `project.md` at the repo root — a personal project. Read
+               `.claude/project-derive.md` and execute it exactly as written. It
+               defines how to read the brief, build a work list from Goals and
+               Surfaces, filter it against Out of scope, and write at most eight
+               proposal or question rows back to Supabase.
+
+            Do NOT mix the two. They differ in ways that matter: the assignment
+            routine tags every row with a rubric aspect ID and aims to cover a
+            closed set, while the project routine leaves `aspect` null and caps
+            its output, because a brief has no completeness criterion. Running the
+            wrong one produces either fabricated aspect keys or an unbounded
+            proposal list.
+
+            If NEITHER file exists, write no rows and say so in the summary — that
+            is a repo whose brief has not been filled in, not an error.
+
+            Complete the whole pass, then exit with the one-paragraph summary the
+            routine you ran specifies.
