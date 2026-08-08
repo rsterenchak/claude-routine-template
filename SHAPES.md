@@ -73,26 +73,31 @@ Pages source: `gh-pages`, root.
 
 ### vanilla
 
-Plain JS with a bundler — the setup `toDoList_TOP` uses, minus the parts that are
-project decisions. The only build-pipeline variant with a template, because there
-is no CLI that scaffolds this.
+Plain JS with a build step — no framework. Vite's `vanilla` template is the
+scaffold; there is no reason to hand-write a webpack config for a new project.
+(`toDoList_TOP` uses webpack because it predates this, not because webpack is
+the better choice today.)
 
-**1 · Use this template**
+**1 · Scaffold** — in the empty repo. The scaffolder refuses a dirty directory,
+so do this before adding anything else.
 
+```bash
+npm create vite@latest . -- --template vanilla
+npm install
+npm install -D vitest
 ```
-rsterenchak/template-vanilla-webpack
+
+**2 · Edit `package.json`** — inside `scripts`
+
+```jsonc
+"build": "vite build --base=/my-app/",
+"test:run": "vitest run"
 ```
 
-**2 · Push, then Check from the app.** There is no edit step. `webpack.config.js`
-sets `publicPath: 'auto'`, which derives the base URL from the script's own
-location at runtime, so the bundle works at `https://<user>.github.io/<repo>/`
-with the repo name nowhere in the config — unlike Angular's `--base-href` and
-Vite's `--base`, which are edited per repo and silently break every asset when
-forgotten.
+**3 · Commit and push**, then Check from the app.
 
-Leaves out the service worker, favicons and web manifest, `dotenv` +
-`DefinePlugin`, and the `gh-pages` CLI — each a dependency and a project
-decision. The template's README says what to add and when.
+Vite outputs to `dist/` already, so there is no `outputPath` equivalent to fix.
+`vanilla-ts` is the same thing with TypeScript if that is wanted.
 
 ### angular
 
