@@ -60,12 +60,15 @@ UNIVERSAL_FILES=(
   ".github/workflows/claude-run.yml"
   ".github/workflows/claude-triage.yml"
 )
-# Node-shape files (build-pipeline + served-from-source): the npm test workflow
-# and the manifest generators. Not used by the .NET shapes.
+# Node-shape files (build-pipeline + served-from-source): the npm test workflow,
+# the manifest generators, and the on-demand complexity-scan workflow (Node
+# shapes only — the scan reads .js/.ts-family source, so the .NET/sql shapes
+# would get inert chrome; same deliberate scoping as CAPTURE_FILES).
 NODE_FILES=(
   ".github/workflows/test.yml"
   "scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs"
+  ".github/workflows/claude-complexity-scan.yml"
 )
 # Shape-specific files.
 #   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
