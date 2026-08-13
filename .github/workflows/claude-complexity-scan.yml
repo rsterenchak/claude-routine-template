@@ -1,0 +1,77 @@
+name: Claude complexity scan
+# correlation_id is echoed into run-name so the app can find this run by name
+# (workflow_dispatch returns no run id to the caller — same trick as
+# claude-scan.yml). The Code lens does not poll active_runs for this today —
+# it polls the complexity_scans row until scanned_at advances — but the id
+# keeps the run findable in the Actions list and leaves the status path open.
+run-name: Claude complexity scan ${{ inputs.correlation_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+      target_file:
+        description: repo-relative path of the file to complexity-scan
+        type: string
+        required: true
+permissions:
+  # The scan reads the file through the Worker (which uses its own PAT),
+  # not through this runner — so the job needs nothing beyond the default.
+  contents: read
+concurrency:
+  # One complexity scan at a time; a second dispatch queues rather than
+  # overlapping. Deliberately a SEPARATE group from claude-scan so a
+  # complexity scan never queues behind a post-merge refactor scan.
+  group: claude-complexity-scan
+  cancel-in-progress: false
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    # The scan itself is ~90s; 10 minutes is generous headroom for a queued
+    # runner without letting a hung request hold a slot indefinitely.
+    timeout-minutes: 10
+    steps:
+      # No checkout: this job exists solely to hold a connection. The scan is
+      # the Worker's own `complexity_scan` route, which awaits an Anthropic
+      # call (~90s, Sonnet at high effort) and persists the complexity_scans
+      # row before returning. A browser cannot hold that open — mobile Safari
+      # drops it and the result is lost along with the tokens that produced
+      # it — so a runner makes the call instead.
+      #
+      # Fails LOUDLY, same as claude-scan.yml: this workflow only ever runs
+      # because someone tapped a file, so if the scan did not happen the run
+      # should be red rather than quietly dropped.
+      - name: Run complexity scan
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          REPO: ${{ github.repository }}
+          TARGET_FILE: ${{ inputs.target_file }}
+        run: |
+          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            echo "Injector not configured (TODO_INJECTOR_URL / TODO_INJECTOR_SECRET) — cannot scan."
+            exit 1
+          fi
+          if [ -z "$TARGET_FILE" ]; then
+            echo "No target_file input — nothing to scan."
+            exit 1
+          fi
+          # jq -n builds the JSON body so an arbitrary path never needs shell
+          # escaping inside a hand-rolled string.
+          jq -n --arg repo "$REPO" --arg tf "$TARGET_FILE" \
+            '{complexity_scan: true, repo: $repo, target_file: $tf}' > /tmp/req.json
+          # --max-time 180 gives the ~90s scan real headroom without hanging the
+          # job if the Worker never answers.
+          curl -sS --max-time 180 -X POST "$INJECTOR_URL" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" \
+            -H "Content-Type: application/json" \
+            -d @/tmp/req.json \
+            -o /tmp/complexity.json || { echo "Complexity scan request failed."; exit 1; }
+          jq -r '
+            if .unchanged then "File unchanged since the last scan — nothing new to find."
+            elif .persisted then "Scan persisted: \(.file_path) — \(.hotspots|length) hotspots."
+            else "SCAN NOT PERSISTED: \(.persist_error // .error // "unknown")"
+            end
+          ' /tmp/complexity.json || { echo "Could not read scan response:"; cat /tmp/complexity.json; exit 1; }
