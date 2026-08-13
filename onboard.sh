@@ -69,6 +69,7 @@ NODE_FILES=(
   "scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs"
   ".github/workflows/claude-complexity-scan.yml"
+  ".github/workflows/claude-scan.yml"
 )
 # Shape-specific files.
 #   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
