@@ -63,14 +63,31 @@ Don't propose work that's already tracked or already provided. Read three things
    never duplicate a proposal or re-propose an accepted/shipped task:
 
 ```
-curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&select=id,state,source,aspect,context" \
+curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&select=id,state,source,aspect,context,question,thread" \
   -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
 ```
 
-   An aspect already carried by any row — a pending proposal, an accepted task, or
-   a shipped one — is **covered**. Skip it. This is exactly what makes derive safe
-   to re-run when the rubric changes: only uncovered aspects get new proposals.
+   An aspect already carried by a **work** row — a pending proposal, an accepted
+   task, or a shipped one — is **covered**. Skip it. This is exactly what makes
+   derive safe to re-run when the rubric changes: only uncovered aspects get new
+   proposals.
+
+   **A `needs_words` question row is not by itself coverage.** A question means an
+   earlier pass couldn't tell what "done" meant — but Robert often resolves that by
+   editing `assignment.md` rather than by replying in the app, and the row stays in
+   the queue either way. Treating it as coverage seals the aspect off permanently:
+   the spec gets fixed, derive re-runs, and the aspect is skipped forever with no
+   task ever written. So for an aspect whose ONLY row is a `needs_words` question,
+   re-read the requirement against the current `assignment.md` and the row's
+   `thread` (the answer, if one was given, is in there):
+
+   - The requirement now reads unambiguously → write a proposal for it, folding in
+     whatever the answer or the updated spec clarified. Do NOT write a second
+     question.
+   - It is still ambiguous in the same way → skip it, write nothing, and name it in
+     the closing summary as still blocked on that open question. One unanswered
+     question per aspect is the cap; never duplicate one.
 
 2. **`TODO.md`** — the current backlog, for the same reason.
 
@@ -195,11 +212,16 @@ Rules:
 - Transcribe the rubric's aspect IDs; never invent your own numbering.
 - Ambiguous requirement → a question, never a guessed task.
 - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
+  A `needs_words` question is not coverage: re-read its requirement and propose if
+  the spec now answers it, rather than skipping the aspect forever.
 - If a curl fails, note it and continue to the next row — don't abort the derive.
 
 ## Closing summary
 
 End with ONE paragraph: how many aspects the rubric has, how many were already
 covered, how many proposals and how many questions you wrote (and for which
+aspect IDs), which aspects you left as manual (process/Git), and which are still
+blocked on an unanswered question. If `assignment.md`
+was missing or empty, say so. This paragraph is what surfaces in the run log.
 aspect IDs), and which aspects you left as manual (process/Git). If `assignment.md`
 was missing or empty, say so. This paragraph is what surfaces in the run log.
