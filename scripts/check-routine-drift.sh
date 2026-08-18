@@ -175,6 +175,14 @@ for repo in "${repos[@]}"; do
       stale:*)
         IFS=: read -r _ n src test <<< "$res"
         note=""; [ -n "$src" ] && note="  [src=$src test=$test]"
+        # Can the file be refreshed losslessly? Only if it IS an older template
+        # revision — see rc_local_edits. The template checkout beside this
+        # script is the history that gets walked.
+        case "$(rc_local_edits "$f" "$tmp" "$SCRIPT_DIR/.." "$src" "$test")" in
+          no:*)   note="$note  no local edits — refresh is lossless" ;;
+          yes)    note="$note  HAS LOCAL EDITS — refresh by hand" ;;
+          *)      note="$note  local edits unknown (shallow checkout?)" ;;
+        esac
         printf '%-45s %-20s %s\n' "$repo" "$f" "STALE   (${n} differing lines)${note}"
         stale["$repo"]+="$f "
         if [ "$SHOW_DIFF" = "1" ]; then
@@ -191,11 +199,11 @@ echo
 echo "checked ${checked} files across ${#repos[@]} repos: ${ok} up to date, ${#stale[@]} repos with stale files, ${#missing[@]} with missing, ${#errored[@]} with errors"
 if [ "${#stale[@]}" -gt 0 ]; then
   echo
-  echo "backfill the stale files. For routine-base.md, copy the template's verbatim."
-  echo "For the templated files, copy the template's and substitute this repo's own"
-  echo "SRC_DIR / TEST_DIR (shown in brackets above) — or re-run onboard.sh's subst on it."
-  echo "A repo with a DELIBERATE local edit will read as stale too; check --show-diff"
-  echo "before overwriting one."
+  echo "backfill the stale files. Files marked 'no local edits' can be refreshed losslessly:"
+  echo "run Onboard on the repo with 'refresh stale routine files' on (onboard.yml's"
+  echo "backfill_stale input), or copy the template's and substitute this repo's own"
+  echo "SRC_DIR / TEST_DIR (shown in brackets). Files marked HAS LOCAL EDITS need a hand"
+  echo "merge — --show-diff shows exactly what's local."
   for r in "${!stale[@]}"; do echo "  - $r: ${stale[$r]}"; done | sort
   echo "(re-run with --show-diff to see exactly what differs.)"
 fi
