@@ -100,3 +100,64 @@ rc_compare_file() { # $1=file name  $2=canon path  $3=repo file path  [$4=diff-o
   [ -n "$expect" ] && rm -f "$expect"
   return 0
 }
+
+# ── Local-edit detection and backfill ─────────────────────────────────────────
+#
+# A stale routine file is safe to overwrite only if nobody ever edited it in the
+# repo — if it is simply an OLDER TEMPLATE REVISION. That is checkable: walk the
+# template's git history for the file, substitute the repo's own dirs into each
+# revision, and compare. A byte match proves the repo's copy is that revision
+# and nothing else; overwriting it loses nothing. No match means the copy carries
+# local edits (or predates recorded history), and a backfill must leave it alone.
+#
+# Prints one of:
+#   no:<sha>    no local edits — the repo's copy IS template revision <sha>
+#   yes         history walked, nothing matches — local edits exist
+#   unknown     no walkable history (template not a checkout, or shallow)
+rc_local_edits() { # $1=file name  $2=repo file  $3=template git dir ("" if none)  $4=src  $5=test
+  local name="$1" repo="$2" gitdir="$3" src="$4" test="$5"
+  { [ -n "$gitdir" ] && git -C "$gitdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; } || { printf 'unknown\n'; return 0; }
+  # A shallow clone holds its tip only; a walk over that proves nothing.
+  if [ "$(git -C "$gitdir" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then printf 'unknown\n'; return 0; fi
+  local shas; shas="$(git -C "$gitdir" log --format=%H -- ".claude/$name" 2>/dev/null || true)"
+  [ -n "$shas" ] || { printf 'unknown\n'; return 0; }
+  local s t cand sha; s="$(rc_sed_escape "$src")"; t="$(rc_sed_escape "$test")"; cand="$(mktemp)"
+  for sha in $shas; do
+    if git -C "$gitdir" show "$sha:.claude/$name" 2>/dev/null \
+         | sed -e "s|{{SRC_DIR}}|$s|g" -e "s|{{TEST_DIR}}|$t|g" > "$cand" \
+       && diff -q "$cand" "$repo" >/dev/null 2>&1; then
+      rm -f "$cand"; printf 'no:%s\n' "$sha"; return 0
+    fi
+  done
+  rm -f "$cand"; printf 'yes\n'; return 0
+}
+
+# Refresh one routine file in place IF it is stale and provably free of local
+# edits. Writes the current template with the file's OWN inferred dirs (never
+# freshly detected ones), so a backfill changes template content and nothing
+# else, and the file carries no placeholders for a later subst pass to touch.
+#
+# Prints one of:
+#   refreshed:N:src:test     overwritten; N lines changed
+#   current                  already up to date, nothing to do
+#   skip:anchor              anchor line missing — dirs can't be inferred
+#   skip:local:N             N lines behind but has local edits — left alone
+#   skip:unknown:N           N lines behind, edits unknown (no history) — left alone
+rc_backfill_file() { # $1=file name  $2=canon path  $3=repo file  $4=template git dir
+  local name="$1" canon="$2" repo="$3" gitdir="$4"
+  local res; res="$(rc_compare_file "$name" "$canon" "$repo")"
+  case "$res" in
+    ok|ok:*)       printf 'current\n'; return 0 ;;
+    stale:anchor)  printf 'skip:anchor\n'; return 0 ;;
+  esac
+  local n src test; IFS=: read -r _ n src test <<< "$res"
+  local le; le="$(rc_local_edits "$name" "$repo" "$gitdir" "$src" "$test")"
+  case "$le" in
+    no:*)
+      if rc_is_templated "$name"; then rc_render_expected "$canon" "$src" "$test" "$repo"; else cp "$canon" "$repo"; fi
+      printf 'refreshed:%s:%s:%s\n' "$n" "$src" "$test" ;;
+    yes)   printf 'skip:local:%s\n' "$n" ;;
+    *)     printf 'skip:unknown:%s\n' "$n" ;;
+  esac
+  return 0
+}
