@@ -49,19 +49,26 @@
 ## Mockups
 
 <!-- Optional, and the only section here that isn't pasted from the PA. It maps a
-     requirement ID to an approved design committed under docs/mockups/, one per
-     line:
+     requirement ID to a committed design, one per line:
 
        - A3 — docs/mockups/world-map.html
-       - B1 — docs/mockups/country-detail.html
+       - B1 — docs/layouts/README.md
 
-     The derive pass reads every file named here and lets it constrain that
-     aspect's proposal. An aspect that turns on a visible surface with no design
-     named here gets PARKED rather than drafted — so adding a line is how a parked
-     aspect gets unblocked on the next derive. Paths are repo-relative and must
-     match the committed filename exactly; a path that doesn't resolve is treated
-     as no mockup at all.
+     Any repo-relative path. docs/mockups/ is the convention for a design made
+     for its own sake; a PA that produced graded wireframes in an earlier task
+     usually keeps them wherever it named, and docs/layouts/ is as good a path.
+
+     Point at whatever a run can READ. Markup (.html, .svg) and a written spec
+     (.md) both work. A .png or .jpg does NOT — an image is opaque to a run, so
+     reference the written spec beside it rather than the picture. Committed
+     wireframes usually want a README.md in the same folder carrying the region
+     contents and page inventory in prose; that README is the line to list here.
+
+     Derive looks in the brief and the repo even when this section is empty, so a
+     design the PA already named in Scenario still gets found. Listing it here is
+     what makes that reliable rather than lucky. An aspect that turns on a visible
+     surface with no readable design found anywhere gets PARKED rather than
+     drafted — adding a line is how a parked aspect gets unblocked.
 
      Leave this section empty (or delete it) on a PA with no UI — a console app,
-     a SQL script, a written report. Delete a line once its surface ships; see
-     docs/mockups/README.md for why a stale mockup is worse than none. -->
+     a SQL script, a written report. -->
