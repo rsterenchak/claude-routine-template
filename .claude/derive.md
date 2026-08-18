@@ -163,33 +163,62 @@ relevant starter source, then produce ONE of:
   cleanly to the code). Write one specific `question` tagged with the aspect.
   Don't draft a task around the ambiguity — ask.
 
-- **A mockup park** — the aspect turns on a visible surface and, after looking,
-  no readable design exists for it.
+- **A mockup park** — the aspect names a visible surface, leaves its contents
+  open, and no committed design fills the gap. Three tests, in order; an aspect
+  parks only if it fails all three.
 
-  **Look before you park.** `## Mockups` is the fast path, not the only one. In
-  order: (1) the `## Mockups` lines; (2) the rest of `assignment.md` — a PA that
-  produced its wireframes in an earlier task usually names where they landed, and
-  that sentence is often in `## Scenario` rather than a section of its own; (3) a
-  design folder in the checkout — `docs/layouts/`, `docs/mockups/`, or whatever
-  the repo actually uses, found with Glob. A written spec found this way is just
-  as authoritative as one named from `## Mockups`; use it, propose from it, and
-  say in the closing summary that it wasn't referenced so Robert can add the line.
-  Parking an aspect whose design was sitting in the repo unreferenced is the worst
-  outcome this step has — it asks him to redo work already done. When the look turns up nothing, the rubric still grades that the surface exists
-  and works, not how it looks — so drafting anyway invents layout the PA never
-  specified. Park it with `state:"needs_mockup"` instead: the app files it in the Coverage tab's
-  blocked group, Robert designs it, commits the file, adds the `## Mockups` line,
-  and a later derive reads it and proposes properly. Put what you do know in
-  `context` — the requirement text, the Competent bar, and any starter markup for
-  the region — so the mockup step starts warm. Same discipline as triage's
+  **1. Is it visual at all?** Only when its Competent bar turns on something a
+  grader looks at on screen — a page, a layout, a report's on-page presentation.
+  A console menu loop, a SQL script, a written document, or a validation rule is
+  not visual: propose it normally.
+
+  **2. Does the requirement specify its own layout?** A requirement that states
+  the surface's structure IS its design — read it as one. "An HTML layout with
+  two columns: one for the map, one for the country information" is a complete
+  spec for a two-column page; "the SVG map provides the visual interface" is a
+  design the PA already handed over as a file. Propose from those directly. The
+  question is whether the requirement text plus what the repo's stack already
+  supplies is enough to build the surface, and the answer depends on the shape:
+
+  - **A framework-scaffolded repo** (Angular, React, .NET) — the framework
+    supplies the component structure, routing, and template skeleton, so a short
+    requirement is usually sufficient. Two columns plus a component model is
+    buildable. Propose.
+  - **A hand-authored static site** (served-from-source, plain HTML) — nothing
+    is supplied. "Create a home page" leaves the regions, their order, and their
+    contents open, and the requirement alone cannot be built from. That is the
+    case a design exists to close, and the shape a PA usually hands wireframes
+    to.
+
+  Do not confuse the two: a sentence that fully specifies a surface in a
+  scaffolded repo is far from sufficient in a static one, and vice versa.
+
+  **3. Does a committed design fill what the requirement left open?** Look
+  before you park. `## Mockups` is the fast path, not the only one. In order:
+  (a) the `## Mockups` lines; (b) the rest of `assignment.md` — a PA that
+  produced its wireframes in an earlier task usually names where they landed,
+  and that sentence is often in `## Scenario` rather than a section of its own;
+  (c) a design folder in the checkout — `docs/layouts/`, `docs/mockups/`, or
+  whatever the repo actually uses, found with Glob. A written spec found this
+  way is just as authoritative as one named from `## Mockups`; use it, propose
+  from it, and say in the closing summary that it wasn't referenced so Robert
+  can add the line. Parking an aspect whose design was sitting in the repo
+  unreferenced is the worst outcome this step has — it asks him to redo work
+  already done.
+
+  Only when all three fail — visual, under-specified for this stack, and no
+  design anywhere — park it with `state:"needs_mockup"`. The rubric grades that
+  the surface exists and works, not how it looks, so drafting anyway would
+  invent layout the PA never specified. The app files the park in the Coverage
+  tab's blocked group, Robert designs it, commits the file, adds the `## Mockups`
+  line, and a later derive reads it and proposes properly. Put what you do know
+  in `context` — the requirement text, the Competent bar, and any starter markup
+  for the region — so the mockup step starts warm. Same discipline as triage's
   `needs_mockup`.
 
-  **Be strict about what counts as visual.** An aspect qualifies only when its
-  Competent bar turns on something a grader looks at on screen — a screen, a
-  layout, a report's on-page presentation. A console menu loop, a SQL script, a
-  written document, or a validation rule is not visual: propose it normally. When
-  in doubt, propose rather than park; a park that didn't need one costs Robert a
-  design session.
+  When in doubt, propose rather than park. A park that didn't need one costs
+  Robert a design session; a proposal that was slightly under-specified costs
+  him a review comment.
 
 Two kinds of aspect get NO proposal — recognize and skip them:
 
@@ -279,9 +308,11 @@ Rules:
   bypasses RLS — never read or write rows for another project.
 - Transcribe the rubric's aspect IDs; never invent your own numbering.
 - Ambiguous requirement → a question, never a guessed task.
-- Visual aspect with no readable design → a park, never a guessed layout. But
-  look first: `## Mockups`, then the rest of the brief, then the checkout's design
-  folder. Park only what a search actually failed to find.
+- Visual aspect with no readable design → a park, never a guessed layout. But a
+  requirement that specifies its own layout IS a design — read it as one, judged
+  against what the repo's stack already supplies. And look before you park:
+  `## Mockups`, then the rest of the brief, then the checkout's design folder.
+  Park only what is genuinely open after all three.
 - Never guess at an image. A `.png` wireframe is opaque; read its sibling spec or
   treat the design as absent.
 - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
