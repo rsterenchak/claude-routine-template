@@ -136,30 +136,6 @@ PREFLIGHT="${ONBOARD_PREFLIGHT:-}"
 PREFLIGHT_OUT="${ONBOARD_PREFLIGHT_OUT:-}"
 PF_CREATE=()
 PF_SKIP=()
-# Where a template file actually LANDS in the target repo. Almost everything is
-# repo-root relative and must stay that way: .github/workflows/* because GitHub
-# only reads workflows from the root, and CLAUDE.md / TODO.md / .claude/* because
-# the routine and the inject_targets row point at them there.
-#
-# scripts/gen-src-manifest.* is the exception. deploy.yml and manifest.yml both
-# run it as `node scripts/gen-src-manifest.js` under
-# `working-directory: $WORKING_DIR`, so on a repo whose project lives in a
-# subfolder the generator has to sit under that subfolder. Writing it to the repo
-# root instead fails the manifest step with "Cannot find module", and checking for
-# it at the root reports a create for a file that already exists one level down —
-# which is what made WeatherApp_TOP show a phantom missing file.
-dest_path_for() {
-  case "$1" in
-    scripts/gen-src-manifest.*)
-      if [ "$WORKING_DIR" = "." ] || [ -z "$WORKING_DIR" ]; then
-        printf '%s' "$1"
-      else
-        printf '%s/%s' "$WORKING_DIR" "$1"
-      fi
-      ;;
-    *) printf '%s' "$1" ;;
-  esac
-}
 # Minimal JSON emitters — no jq dependency; values here are plain strings.
 pf_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 pf_arr() {
@@ -172,6 +148,43 @@ pf_arr() {
   done
   printf ']'
 }
+# Emit an array of already-formed JSON objects (each argument is one object).
+pf_objarr() {
+  local first=1 x
+  printf '['
+  for x in "$@"; do
+    [ $first -eq 1 ] || printf ','
+    printf '%s' "$x"
+    first=0
+  done
+  printf ']'
+}
+# One `stale[]` entry. $2 empty => JSON null (anchor line missing).
+pf_stale_obj() { # $1=file  $2=lines|""  $3=src  $4=test  $5=reason|""
+  local lines="null"; [ -n "$2" ] && lines="$2"
+  printf '{"file":"%s","lines":%s,"src":"%s","test":"%s"' \
+    "$(pf_esc "$1")" "$lines" "$(pf_esc "$3")" "$(pf_esc "$4")"
+  [ -n "$5" ] && printf ',"reason":"%s"' "$(pf_esc "$5")"
+  printf '}'
+}
+# The routine-file comparison lives in scripts/lib/routine-compare.sh so
+# check-routine-drift.sh and this script agree byte-for-byte on what "stale"
+# means. Sourced from beside this script when run inside a template checkout
+# (CI always is); fetched otherwise. Absent lib => preflight simply reports no
+# stale files, and says so, rather than failing a read-only run.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || pwd)"
+RC_LIB=""
+if [ -f "$SCRIPT_DIR/scripts/lib/routine-compare.sh" ]; then
+  RC_LIB="$SCRIPT_DIR/scripts/lib/routine-compare.sh"
+else
+  RC_LIB_TMP="$(mktemp)"
+  if curl -fsSL "${RAW_BASE}/scripts/lib/routine-compare.sh" -o "$RC_LIB_TMP" 2>/dev/null; then
+    RC_LIB="$RC_LIB_TMP"
+  else
+    rm -f "$RC_LIB_TMP"
+  fi
+fi
+[ -n "$RC_LIB" ] && . "$RC_LIB"
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
@@ -708,6 +721,33 @@ for f in "${TEMPLATE_FILES[@]}"; do
   if [ -e "$TARGET/$dest_rel" ]; then
     echo "  ${c_yel}skip${c_rst}   $dest_rel  (already exists)"
     PF_SKIP+=("$dest_rel")
+    # Preflight only: an existing routine file is not necessarily a CURRENT
+    # one. Compare the four checked .claude/ files against the template's copy
+    # (see scripts/lib/routine-compare.sh for the two tiers). Anything else
+    # that already exists is left as a plain skip, as before.
+    if [ -n "$PREFLIGHT" ] && [ -n "$RC_LIB" ]; then
+      case "$dest_rel" in
+        .claude/*.md)
+          rc_name="${dest_rel#.claude/}"
+          if rc_is_checked "$rc_name"; then
+            rc_tmp="$(mktemp)"
+            rc_canon="$(rc_canon_path "$SCRIPT_DIR/.claude" "$RAW_BASE" "$rc_name" "$rc_tmp")" || rc_canon=""
+            if [ -n "$rc_canon" ]; then
+              rc_res="$(rc_compare_file "$rc_name" "$rc_canon" "$TARGET/$dest_rel")"
+              case "$rc_res" in
+                stale:anchor)
+                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (anchor line missing — predates the current template)"
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "" "" "" "anchor line missing — predates the current template")") ;;
+                stale:*)
+                  IFS=: read -r _ rc_n rc_src rc_test <<< "$rc_res"
+                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (${rc_n} lines differ from the template)"
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "$rc_n" "$rc_src" "$rc_test" "")") ;;
+              esac
+            fi
+            rm -f "$rc_tmp"
+          fi ;;
+      esac
+    fi
   else
     echo "  ${c_grn}create${c_rst} $dest_rel"
     PF_CREATE+=("$dest_rel")
@@ -796,7 +836,7 @@ if [ -n "$PREFLIGHT" ]; then
   # kills the script mid-report. CI always clones so origin exists there, but a
   # local preflight on a remote-less repo would abort with no output at all.
   pf_slug="$(git -C "$TARGET" remote get-url origin 2>/dev/null \
-    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##' || true)"
+    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
   PF_JSON="$(printf '{"repo":"%s","shape":"%s","shape_reason":"%s","purpose":"%s","working_dir":"%s","src_prefix":"%s","install_command":"%s","test_command":"%s","build_command":"%s","manifest_variant":"%s","is_esm":%s,"create":%s,"skip":%s,"warnings":%s}' \
     "$(pf_esc "$pf_slug")" \
     "$(pf_esc "$SHAPE")" \
@@ -811,12 +851,21 @@ if [ -n "$PREFLIGHT" ]; then
     "$IS_ESM" \
     "$(pf_arr "${PF_CREATE[@]}")" \
     "$(pf_arr "${PF_SKIP[@]}")" \
-    "$(pf_arr "${PF_WARN[@]}")")"
+    "$(pf_arr "${PF_WARN[@]}")" \
+    "$(pf_objarr "${PF_STALE[@]+"${PF_STALE[@]}"}")")"
   echo
   echo "${c_bold}Preflight — no files written, no repo settings changed.${c_rst}"
   if [ "${#PF_WARN[@]}" -gt 0 ]; then
     echo
     for w in "${PF_WARN[@]}"; do echo "  ${c_yel}warn${c_rst}  $w"; done
+  fi
+  if [ "${#PF_STALE[@]}" -gt 0 ]; then
+    echo
+    echo "  ${c_yel}stale${c_rst} ${#PF_STALE[@]} routine file(s) exist but differ from the template — see the file list above."
+    echo "        A deliberate local edit reads as stale too; check before overwriting."
+  elif [ -z "$RC_LIB" ]; then
+    echo
+    echo "  ${c_yel}note${c_rst}  routine-compare.sh unavailable — stale check skipped."
   fi
   echo
   echo "<<<PREFLIGHT_JSON"

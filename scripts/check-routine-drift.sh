@@ -48,6 +48,13 @@
 #         1 if any drift / missing / error;
 #         2 on a usage/setup problem.
 #
+<<<<<<< HEAD
+=======
+# The comparison itself lives in scripts/lib/routine-compare.sh, shared with
+# onboard.sh's preflight (which reports the same thing as `stale[]`), so the two
+# can never disagree.
+#
+>>>>>>> 58c1554 (update routine files)
 # Requires: bash 4+, curl, diff, sed, python3 (only for the worker-list path).
 
 set -uo pipefail
@@ -57,10 +64,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANON_DIR="$SCRIPT_DIR/../.claude"
 SHOW_DIFF=0
 
+<<<<<<< HEAD
 # The two tiers. Order here is the report order.
 VERBATIM_FILES=( routine-base.md )
 TEMPLATED_FILES=( triage.md derive.md project-derive.md )
 ALL_FILES=( "${VERBATIM_FILES[@]}" "${TEMPLATED_FILES[@]}" )
+=======
+# The two tiers, and every comparison helper, come from the shared lib.
+. "$SCRIPT_DIR/lib/routine-compare.sh" || { echo "scripts/lib/routine-compare.sh not found beside this script" >&2; exit 2; }
+VERBATIM_FILES=( "${RC_VERBATIM[@]}" )
+TEMPLATED_FILES=( "${RC_TEMPLATED[@]}" )
+ALL_FILES=( "${RC_ALL[@]}" )
+>>>>>>> 58c1554 (update routine files)
 
 ARGS=(); ONLY=()
 while [ $# -gt 0 ]; do
@@ -88,8 +103,11 @@ fi
 for f in "${ALL_FILES[@]}"; do
   [ -f "$CANON_DIR/$f" ] || { echo "canonical copy not found at $CANON_DIR/$f — run from the template checkout" >&2; exit 2; }
 done
+<<<<<<< HEAD
 
 is_templated() { local f; for f in "${TEMPLATED_FILES[@]}"; do [ "$f" = "$1" ] && return 0; done; return 1; }
+=======
+>>>>>>> 58c1554 (update routine files)
 
 # ---- resolve the repo list ------------------------------------------------
 repos=()
@@ -113,7 +131,11 @@ EOF
 fi
 
 # ---- helpers --------------------------------------------------------------
+<<<<<<< HEAD
 tmp="$(mktemp)"; expect="$(mktemp)"; trap 'rm -f "$tmp" "$expect"' EXIT
+=======
+tmp="$(mktemp)"; dtmp="$(mktemp)"; trap 'rm -f "$tmp" "$dtmp"' EXIT
+>>>>>>> 58c1554 (update routine files)
 
 # Fetch a repo file into $tmp; echo the HTTP code.
 fetch() { # $1=repo $2=relpath
@@ -124,6 +146,7 @@ fetch() { # $1=repo $2=relpath
   curl -sS -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null || echo 000
 }
 
+<<<<<<< HEAD
 # Read the repo's own SRC_DIR / TEST_DIR back off its copy of a templated file.
 # The anchor line onboard.sh substitutes into is byte-stable across the three
 # templated files:   Source under `{{SRC_DIR}}`, tests under `{{TEST_DIR}}`.
@@ -142,6 +165,8 @@ render_expected() { # $1=canon $2=src $3=test  -> writes $expect
   sed -e "s|{{SRC_DIR}}|$s|g" -e "s|{{TEST_DIR}}|$t|g" "$1" > "$expect"
 }
 
+=======
+>>>>>>> 58c1554 (update routine files)
 # ---- audit ----------------------------------------------------------------
 declare -A stale=() missing=() errored=()
 ok=0; checked=0
@@ -161,6 +186,7 @@ for repo in "${repos[@]}"; do
     # Skip the derive variant this repo doesn't carry.
     if [ "$f" = "derive.md" ] && [ "$has_derive" = 0 ] && [ "$has_pderive" = 1 ]; then
       printf '%-45s %-20s %s\n' "$repo" "$f" "n/a (project repo)"; continue
+<<<<<<< HEAD
     fi
     if [ "$f" = "project-derive.md" ] && [ "$has_pderive" = 0 ] && [ "$has_derive" = 1 ]; then
       printf '%-45s %-20s %s\n' "$repo" "$f" "n/a (assignment repo)"; continue
@@ -203,6 +229,45 @@ for repo in "${repos[@]}"; do
         echo "-----------------------------------------------------------"
       fi
     fi
+=======
+    fi
+    if [ "$f" = "project-derive.md" ] && [ "$has_pderive" = 0 ] && [ "$has_derive" = 1 ]; then
+      printf '%-45s %-20s %s\n' "$repo" "$f" "n/a (assignment repo)"; continue
+    fi
+
+    checked=$((checked + 1))
+    code="$(fetch "$repo" ".claude/$f")"
+    if [ "$code" = "404" ]; then
+      printf '%-45s %-20s %s\n' "$repo" "$f" "MISSING (not on ${BRANCH})"
+      missing["$repo"]+="$f "; continue
+    elif [ "$code" != "200" ]; then
+      printf '%-45s %-20s %s\n' "$repo" "$f" "ERROR   (HTTP ${code})"
+      errored["$repo"]+="$f "; continue
+    fi
+
+    canon="$CANON_DIR/$f"
+    res="$(rc_compare_file "$f" "$canon" "$tmp" "$dtmp")"
+    case "$res" in
+      ok)
+        printf '%-45s %-20s %s\n' "$repo" "$f" "up to date"; ok=$((ok + 1)) ;;
+      ok:*)
+        IFS=: read -r _ src test <<< "$res"
+        printf '%-45s %-20s %s\n' "$repo" "$f" "up to date  [src=$src test=$test]"; ok=$((ok + 1)) ;;
+      stale:anchor)
+        printf '%-45s %-20s %s\n' "$repo" "$f" "STALE   (anchor line missing — predates the current template)"
+        stale["$repo"]+="$f " ;;
+      stale:*)
+        IFS=: read -r _ n src test <<< "$res"
+        note=""; [ -n "$src" ] && note="  [src=$src test=$test]"
+        printf '%-45s %-20s %s\n' "$repo" "$f" "STALE   (${n} differing lines)${note}"
+        stale["$repo"]+="$f "
+        if [ "$SHOW_DIFF" = "1" ]; then
+          echo "----- diff: template (<) vs ${repo}/.claude/${f} (>) -----"
+          cat "$dtmp"
+          echo "-----------------------------------------------------------"
+        fi ;;
+    esac
+>>>>>>> 58c1554 (update routine files)
   done
 done
 
