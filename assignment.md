@@ -8,7 +8,8 @@
 
      Only "## Requirements" is required — the lettered items you're graded on.
      Scenario, Rubric, and Common reasons for return are optional; fill the ones
-     your PA actually provides. The HTML-comment hints below are ignored — leave
+     your PA actually provides. Mockups is the one section that isn't the PA's —
+     it's yours; see its note at the bottom. The HTML-comment hints below are ignored — leave
      them or delete them, it makes no difference.
      ========================================================================= -->
 
@@ -43,3 +44,24 @@
      It's a pre-written list of how submissions fail this exact PA, so it's the
      highest-signal thing here: every task gets checked against it. Delete this
      section if your PA has none. -->
+
+
+## Mockups
+
+<!-- Optional, and the only section here that isn't pasted from the PA. It maps a
+     requirement ID to an approved design committed under docs/mockups/, one per
+     line:
+
+       - A3 — docs/mockups/world-map.html
+       - B1 — docs/mockups/country-detail.html
+
+     The derive pass reads every file named here and lets it constrain that
+     aspect's proposal. An aspect that turns on a visible surface with no design
+     named here gets PARKED rather than drafted — so adding a line is how a parked
+     aspect gets unblocked on the next derive. Paths are repo-relative and must
+     match the committed filename exactly; a path that doesn't resolve is treated
+     as no mockup at all.
+
+     Leave this section empty (or delete it) on a PA with no UI — a console app,
+     a SQL script, a written report. Delete a line once its surface ships; see
+     docs/mockups/README.md for why a stale mockup is worse than none. -->
