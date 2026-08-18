@@ -6,38 +6,23 @@ This file is the agent's primary architectural reference for this repository. It
 
 ## Onboarding checklist (delete this section after you finish)
 
-You just instantiated this repo from the `claude-routine-template`. Before this repo can participate in the Claude routine, complete these steps. Most are 30 seconds each.
+`onboard.sh` already did the mechanical part: every `{{…}}` placeholder in this
+file is filled, the workflows exist, the manifest variant is picked, and this repo
+is registered as an inject target. Two things it cannot do, because they need
+someone who knows the code:
 
-**Files to fill in:**
-- [ ] Replace `{{PROJECT_NAME}}` everywhere in this file with this project's name (the repo name is usually fine: e.g. `my-app`, `react-thing`, `cool-project`).
-- [ ] Replace `{{PROJECT_DESCRIPTION}}` with 1-2 sentences about what this project is and what it does.
-- [ ] Replace `{{STACK}}` with the technology stack (e.g. `vanilla JS + Webpack`, `React + Vite`, `Next.js`, `SvelteKit`).
-- [ ] Replace `{{SRC_DIR}}` with the path from the repo root to the source directory (e.g. `src/` for most projects, `app/src/` if nested, `packages/web/src/` for monorepos).
-- [ ] Replace `{{TEST_DIR}}` with the test directory path if applicable (e.g. `tests/`, `__tests__/`, `spec/`).
-- [ ] Replace `{{TEST_COMMAND}}` with the command CI runs to test (e.g. `npm test`, `npm run test:ci`, `vitest run`).
-- [ ] Replace `{{BUILD_COMMAND}}` with the command CI runs to build (e.g. `npm run build`, `vite build`).
-- [ ] Replace `{{DEPLOY_TARGET}}` with where the project deploys (e.g. `GitHub Pages`, `Cloudflare Pages`, `Vercel`, or `none — library, no deploy`).
+- [ ] Fill in **Key files in this repo** below — the load-bearing files under
+      `{{SRC_DIR}}`, one line each. Without it every run greps blindly; with it
+      the run goes to the right file first.
+- [ ] Fill in the **conventions** a run must honor that the code does not make
+      obvious: where files live if not under `{{SRC_DIR}}`, what must never be
+      introduced, how work is split. On coursework, put these in the Assignment
+      context section and include the assignment's own rules (a single
+      stylesheet, no frameworks, one entry per graded requirement, and so on).
 
-**Project-specific sections to fill in:**
-- [ ] Fill in the "Key files in this repo" section with the load-bearing files in `{{SRC_DIR}}` and brief descriptions of each.
-- [ ] Fill in any project-specific operating discipline that diverges from the defaults documented below.
-
-**Workflow files to verify:**
-- [ ] `.github/workflows/claude-run.yml` exists and references `CLAUDE_CODE_OAUTH_TOKEN` as a secret.
-- [ ] `.github/workflows/test.yml` exists and runs `{{TEST_COMMAND}}`.
-- [ ] `.github/workflows/deploy.yml` exists, runs `{{BUILD_COMMAND}}`, and includes a step to run `scripts/gen-src-manifest.{js|cjs}` so the in-app Claude assistant can attach files from this repo.
-- [ ] Pick the right manifest generator variant:
-  - If `package.json` has `"type": "module"` → use `scripts/gen-src-manifest.cjs`, delete the `.js` variant.
-  - Otherwise → use `scripts/gen-src-manifest.js`, delete the `.cjs` variant.
-
-**External setup:**
-- [ ] Configure the Claude GitHub App to access this repo: https://github.com/apps/claude
-- [ ] Add this repo to your GitHub PAT's access list: https://github.com/settings/personal-access-tokens
-- [ ] Register this repo as an inject target so the Worker and PWA can reach it. In the PWA: **Inject settings → + Add target** — repo `<owner>/<repo>`, file `TODO.md`, src prefix `{{SRC_DIR}}`. This writes a row to the Supabase `inject_targets` table, which the Worker's `resolveTarget` reads live — no code edit, no Worker redeploy. (Onboarding through CI/`onboard.yml` inserts this row for you.)
-- [ ] In the PWA's chat surface, switch the workspace pill to this repo and verify the file manifest loads (the picker should list files from `{{SRC_DIR}}`).
-- [ ] Inject a small test entry (e.g. `- [ ] **[LOW]** Add a console.log to verify routine integration` — a trivial change you can revert). Verify `claude-run.yml` picks it up, opens a PR, and auto-merges. Once verified, you're integrated.
-
-After all checkboxes are done, **delete this entire "Onboarding checklist" section** from CLAUDE.md. The rest of the document is the real reference.
+If any `{{…}}` remains anywhere in this file, `onboard.sh` missed it — fill it by
+hand. Then delete this section: the row Check in the PWA warns while it is still
+here, so a run never reads a stub thinking it is the reference.
 
 ---
 
@@ -151,10 +136,10 @@ The in-app Claude assistant's chat (Sonnet) gets context through three distinct 
 
 > Fill this in with the actual load-bearing files. Aim for 1-line descriptions. Example structure:
 >
-> - `{{SRC_DIR}}/main.js` (or equivalent entry point) — what it does
-> - `{{SRC_DIR}}/dataLayer.js` — data model / state — note if ALL mutations route through here
-> - `{{SRC_DIR}}/components/Foo.jsx` — what it does
-> - `{{TEST_DIR}}/dataLayer.test.js` — test coverage for the data layer
+> - `{{SRC_DIR}}main.js` (or equivalent entry point) — what it does
+> - `{{SRC_DIR}}dataLayer.js` — data model / state — note if ALL mutations route through here
+> - `{{SRC_DIR}}components/Foo.jsx` — what it does
+> - `{{TEST_DIR}}dataLayer.test.js` — test coverage for the data layer
 >
 > Including this section honestly is high-leverage. Without it the agent has to grep blindly; with it the agent goes to the right file first.
 
@@ -231,7 +216,7 @@ Entries in `TODO.md` follow a strict format because an automated parser reads th
 - [ ] **[PRIORITY]** Imperative verb + specific change
   - Type: bug | feature
   - Description: 2-4 concrete sentences — what's wrong or what to build, expected behavior, likely code locations.
-  - File: `{{SRC_DIR}}/main.js`, `{{SRC_DIR}}/style.css`
+  - File: `{{SRC_DIR}}main.js`, `{{SRC_DIR}}style.css`
   - Completed: YYYY-MM-DD (PR #<number>)
 ```
 
