@@ -136,6 +136,31 @@ PREFLIGHT="${ONBOARD_PREFLIGHT:-}"
 PREFLIGHT_OUT="${ONBOARD_PREFLIGHT_OUT:-}"
 PF_CREATE=()
 PF_SKIP=()
+PF_STALE=()   # preflight only: routine files that exist but differ from the template
+# Where a template file actually LANDS in the target repo. Almost everything is
+# repo-root relative and must stay that way: .github/workflows/* because GitHub
+# only reads workflows from the root, and CLAUDE.md / TODO.md / .claude/* because
+# the routine and the inject_targets row point at them there.
+#
+# scripts/gen-src-manifest.* is the exception. deploy.yml and manifest.yml both
+# run it as `node scripts/gen-src-manifest.js` under
+# `working-directory: $WORKING_DIR`, so on a repo whose project lives in a
+# subfolder the generator has to sit under that subfolder. Writing it to the repo
+# root instead fails the manifest step with "Cannot find module", and checking for
+# it at the root reports a create for a file that already exists one level down —
+# which is what made WeatherApp_TOP show a phantom missing file.
+dest_path_for() {
+  case "$1" in
+    scripts/gen-src-manifest.*)
+      if [ "$WORKING_DIR" = "." ] || [ -z "$WORKING_DIR" ]; then
+        printf '%s' "$1"
+      else
+        printf '%s/%s' "$WORKING_DIR" "$1"
+      fi
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 # Minimal JSON emitters — no jq dependency; values here are plain strings.
 pf_esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 pf_arr() {
@@ -836,8 +861,8 @@ if [ -n "$PREFLIGHT" ]; then
   # kills the script mid-report. CI always clones so origin exists there, but a
   # local preflight on a remote-less repo would abort with no output at all.
   pf_slug="$(git -C "$TARGET" remote get-url origin 2>/dev/null \
-    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##')"
-  PF_JSON="$(printf '{"repo":"%s","shape":"%s","shape_reason":"%s","purpose":"%s","working_dir":"%s","src_prefix":"%s","install_command":"%s","test_command":"%s","build_command":"%s","manifest_variant":"%s","is_esm":%s,"create":%s,"skip":%s,"warnings":%s}' \
+    | sed -e 's#^.*github\.com[:/]##' -e 's#\.git$##' || true)"
+  PF_JSON="$(printf '{"repo":"%s","shape":"%s","shape_reason":"%s","purpose":"%s","working_dir":"%s","src_prefix":"%s","install_command":"%s","test_command":"%s","build_command":"%s","manifest_variant":"%s","is_esm":%s,"create":%s,"skip":%s,"warnings":%s,"stale":%s}' \
     "$(pf_esc "$pf_slug")" \
     "$(pf_esc "$SHAPE")" \
     "$(pf_esc "$SHAPE_REASON")" \
