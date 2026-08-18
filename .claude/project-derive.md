@@ -201,7 +201,7 @@ Rules:
   appending ` — Completed: YYYY-MM-DD (PR #N)` to the entry's TITLE line when it
   ships (see routine-base.md step 3), so a sub-bullet is never filled in — it
   just sits in TODO.md as a literal `YYYY-MM-DD (PR #<number>)` placeholder
-  forever. There are already two of those in toDoList_TOP's backlog from drafts
+  forever. There are already 40 of those in toDoList_TOP's backlog from drafts
   that followed an earlier version of this spec.
 - Do NOT invent an `<!-- id -->` marker — the app assigns it when Robert accepts.
 - Follow this repo's `CLAUDE.md` conventions AND the brief's `## Constraints`.
