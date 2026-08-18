@@ -48,11 +48,14 @@
 
 ## Mockups
 
-<!-- Optional, and the only section here that isn't pasted from the PA. It maps a
-     requirement ID to a committed design, one per line:
+<!-- Optional, and the only section here that isn't pasted from the PA. It maps
+     requirement IDs to a committed design, one design per line:
 
        - A3 — docs/mockups/world-map.html
-       - B1 — docs/layouts/README.md
+       - B1, B2a, B2b, B4 — docs/layouts/README.md
+
+     Several comma-separated IDs on one line when a single design covers them
+     all — the usual coursework shape, where one written spec governs every page.
 
      Any repo-relative path. docs/mockups/ is the convention for a design made
      for its own sake; a PA that produced graded wireframes in an earlier task
