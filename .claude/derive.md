@@ -295,6 +295,12 @@ Rules:
   forever. There are already 40 of those in toDoList_TOP's backlog from drafts
   that followed an earlier version of this spec.
 - Do NOT invent an `<!-- id -->` marker — the app assigns it when Robert accepts.
+- **A proposal drafted from a committed design names that design's path in its
+  Description** — `(layout #1, docs/layouts/README.md)` — the way it would name a
+  source file. The run that ships the entry reads TODO.md, not `assignment.md`
+  or `## Mockups`, so the path in the entry is the only way the full spec reaches
+  it; without it the run builds from your summary of the design rather than the
+  design. Name it once, at the point the entry starts describing the surface.
 - Follow this repo's `CLAUDE.md` conventions (dependencies, styling, architecture).
   Only mention a constraint that's actually relevant.
 - Expand with `- Behavior:` / `- Implementation notes:` / `- Out of scope:`
