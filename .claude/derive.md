@@ -37,7 +37,7 @@ Consult `CLAUDE.md` for this project's conventions before drafting proposals.
 
 ## Step 1 — read the assignment
 
-Read `assignment.md` from the checkout. It has up to four `##` sections; only
+Read `assignment.md` from the checkout. It has up to five `##` sections; only
 Requirements is guaranteed present:
 
 - `## Scenario` — context (the client, the existing system, what to build). Not
@@ -50,10 +50,20 @@ Requirements is guaranteed present:
 - `## Common reasons for return` — if present, a list of how submissions fail
   this exact PA. Treat it as a hard guardrail: every proposal must avoid these
   failure modes, and it's the highest-signal input in the file.
+- `## Mockups` — optional, and the only section not transcribed from the PA:
+  Robert's own map from an aspect ID to a committed design, one per line
+  (`- A3 — docs/mockups/world-map.html`).
 
 Ignore HTML comments (`<!-- ... -->`) — they're the template's hints, not spec.
 If `assignment.md` is missing, or its Requirements section is empty, write no
 proposals and say so in the closing summary.
+
+**Read any mockup referenced from `## Mockups`.** A path like
+`docs/mockups/world-map.html` is a committed design decision — read the file and
+let it constrain that aspect's proposal, down to the element names and the
+structure it implies. If a referenced mockup does not exist at that path, do not
+invent its design: say so in the proposal's description and keep the entry to
+structure rather than layout.
 
 ## Step 2 — read what already exists
 
@@ -88,6 +98,14 @@ curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&select=id,s
    - It is still ambiguous in the same way → skip it, write nothing, and name it in
      the closing summary as still blocked on that open question. One unanswered
      question per aspect is the cap; never duplicate one.
+
+   **Nor is a `needs_mockup` row coverage.** It means an earlier pass found the
+   aspect visual and had no design to work from. Once Robert commits the mockup
+   and adds its `## Mockups` line, the aspect is ready to propose — so for an
+   aspect whose ONLY row is a `needs_mockup` park, check `## Mockups` for a path:
+   the design now exists → read it and write the proposal; still no design → skip
+   it, write nothing (never a second park), and name it in the closing summary as
+   waiting on a mockup.
 
 2. **`TODO.md`** — the current backlog, for the same reason.
 
@@ -127,6 +145,23 @@ relevant starter source, then produce ONE of:
   cleanly to the code). Write one specific `question` tagged with the aspect.
   Don't draft a task around the ambiguity — ask.
 
+- **A mockup park** — the aspect turns on a visible surface and `## Mockups` names
+  no design for it. The rubric grades that the surface exists and works, not how
+  it looks, so drafting one anyway invents layout the PA never specified. Park it
+  with `state:"needs_mockup"` instead: the app files it in the Coverage tab's
+  blocked group, Robert designs it, commits the file, adds the `## Mockups` line,
+  and a later derive reads it and proposes properly. Put what you do know in
+  `context` — the requirement text, the Competent bar, and any starter markup for
+  the region — so the mockup step starts warm. Same discipline as triage's
+  `needs_mockup`.
+
+  **Be strict about what counts as visual.** An aspect qualifies only when its
+  Competent bar turns on something a grader looks at on screen — a screen, a
+  layout, a report's on-page presentation. A console menu loop, a SQL script, a
+  written document, or a validation rule is not visual: propose it normally. When
+  in doubt, propose rather than park; a park that didn't need one costs Robert a
+  design session.
+
 Two kinds of aspect get NO proposal — recognize and skip them:
 
 - **Process / Git aspects** — "make N meaningful commits", "develop on the
@@ -165,12 +200,16 @@ renders); and `thread` = a single agent message with an ISO `ts`.
   `{"project_id":"$PROJECT_ID","source":"derive","aspect":"A1","todo_id":null,"state":"proposed","context":{"title":"...","description":"..."},"draft":"<full TODO.md entry>","file_paths":["{{SRC_DIR}}..."],"thread":[{"role":"agent","text":"Proposed from A1.","ts":"<now>"}]}`
 - **Question:**
   `{"project_id":"$PROJECT_ID","source":"derive","aspect":"A1","todo_id":null,"state":"needs_words","context":{"title":"...","description":"..."},"question":"<the question>","thread":[{"role":"agent","text":"<the question>","ts":"<now>"}]}`
+- **Mockup park:**
+  `{"project_id":"$PROJECT_ID","source":"derive","aspect":"A1","todo_id":null,"state":"needs_mockup","context":{"title":"...","description":"...","change":"<the surface the requirement calls for>","markup":"<starter markup for the region, if any>"},"thread":[{"role":"agent","text":"Visual aspect — parked for a mockup.","ts":"<now>"}]}`
 
 `state:"proposed"` is the review-gate state — the row waits in the Proposed bucket
 until Robert accepts it (which promotes its `draft` into TODO.md) or dismisses it;
 derive never dispatches it. `state:"needs_words"` reuses the existing
 clarifying-question path, so a derived question surfaces in the same "Needs you"
-bucket as a triage question. `file_paths` MUST match the paths inside the drafted
+bucket as a triage question, and `state:"needs_mockup"` reuses triage's mockup
+path the same way. A parked row carries no `draft` and no `file_paths` — there is
+nothing to ship until a design exists. `file_paths` MUST match the paths inside the drafted
 entry — they drive the serialize check and the post-run diff guard downstream.
 
 ## TODO.md entry format (for a proposal's `draft`)
@@ -195,7 +234,7 @@ Rules:
   appending ` — Completed: YYYY-MM-DD (PR #N)` to the entry's TITLE line when it
   ships (see routine-base.md step 3), so a sub-bullet is never filled in — it
   just sits in TODO.md as a literal `YYYY-MM-DD (PR #<number>)` placeholder
-  forever. There are already two of those in toDoList_TOP's backlog from drafts
+  forever. There are already 40 of those in toDoList_TOP's backlog from drafts
   that followed an earlier version of this spec.
 - Do NOT invent an `<!-- id -->` marker — the app assigns it when Robert accepts.
 - Follow this repo's `CLAUDE.md` conventions (dependencies, styling, architecture).
@@ -211,17 +250,19 @@ Rules:
   bypasses RLS — never read or write rows for another project.
 - Transcribe the rubric's aspect IDs; never invent your own numbering.
 - Ambiguous requirement → a question, never a guessed task.
+- Visual aspect with no mockup → a park, never a guessed layout. Read the design
+  `## Mockups` names, or park the aspect; don't split the difference by
+  describing a layout in prose.
 - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
   A `needs_words` question is not coverage: re-read its requirement and propose if
-  the spec now answers it, rather than skipping the aspect forever.
+  the spec now answers it, rather than skipping the aspect forever. Nor is a
+  `needs_mockup` park: propose once the design it was waiting on is committed.
 - If a curl fails, note it and continue to the next row — don't abort the derive.
 
 ## Closing summary
 
 End with ONE paragraph: how many aspects the rubric has, how many were already
-covered, how many proposals and how many questions you wrote (and for which
+covered, how many proposals, questions, and mockup parks you wrote (and for which
 aspect IDs), which aspects you left as manual (process/Git), and which are still
-blocked on an unanswered question. If `assignment.md`
-was missing or empty, say so. This paragraph is what surfaces in the run log.
-aspect IDs), and which aspects you left as manual (process/Git). If `assignment.md`
-was missing or empty, say so. This paragraph is what surfaces in the run log.
+blocked on an unanswered question or an unmade mockup. If `assignment.md` was
+missing or empty, say so. This paragraph is what surfaces in the run log.
