@@ -44,6 +44,14 @@
 # Flags:  --show-diff   print the actual diff for each stale file.
 #         --only FILE   check just one file (e.g. --only derive.md). Repeatable.
 # Env:    ROUTINE_BRANCH  branch to read from (default: main).
+#         GH_TOKEN        a GitHub token; needed to read PRIVATE repos. Without
+#                         it, raw GitHub returns 404 for every file in a private
+#                         repo — indistinguishable from the file being absent —
+#                         so this script reports such a repo as "MISSING (or
+#                         private — set GH_TOKEN)". `gh auth token` yields one.
+#                         Beware: an INVALID or expired token makes raw GitHub
+#                         404 on PUBLIC repos too — so if every repo suddenly
+#                         reads unreadable, suspect the token before the repos.
 # Exit:   0 if every checked file in every repo is up to date;
 #         1 if any drift / missing / error;
 #         2 on a usage/setup problem.
@@ -119,12 +127,18 @@ fi
 tmp="$(mktemp)"; dtmp="$(mktemp)"; trap 'rm -f "$tmp" "$dtmp"' EXIT
 
 # Fetch a repo file into $tmp; echo the HTTP code.
+# GH_TOKEN, when set, is sent as `Authorization: token …` — raw.githubusercontent
+# honours it for private repos. Public repos work either way, so setting it is
+# always safe; NOT setting it silently turns every private repo into a wall of
+# 404s (see the header). The token never appears in output.
+GH_AUTH=()
+[ -n "${GH_TOKEN:-}" ] && GH_AUTH=( -H "Authorization: token ${GH_TOKEN}" )
 fetch() { # $1=repo $2=relpath
   # Cache-buster: raw's CDN caches ~5min by path; a unique query nudges a fresh
   # read where honored (harmless where ignored). A backfill can still take a few
   # minutes to reflect here.
   local url="https://raw.githubusercontent.com/${1}/${BRANCH}/${2}?_=$(date +%s%N)"
-  curl -sS -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null || echo 000
+  curl -sS "${GH_AUTH[@]+"${GH_AUTH[@]}"}" -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null || echo 000
 }
 
 # ---- audit ----------------------------------------------------------------
@@ -141,6 +155,24 @@ for repo in "${repos[@]}"; do
   has_derive=0; has_pderive=0
   code="$(fetch "$repo" ".claude/derive.md")";         [ "$code" = 200 ] && has_derive=1
   code="$(fetch "$repo" ".claude/project-derive.md")"; [ "$code" = 200 ] && has_pderive=1
+  # Neither derive file AND no routine-base.md: raw is 404ing on everything,
+  # which is not a repo that lost its whole .claude/ — it is a repo raw cannot
+  # serve to us. Without a token that means private; with one it means the
+  # token can't read this repo or is invalid/expired (an invalid token 404s
+  # even public repos). Say the right one once and move on — four MISSING rows
+  # would point at the wrong problem.
+  if [ "$has_derive" = 0 ] && [ "$has_pderive" = 0 ]; then
+    code="$(fetch "$repo" ".claude/routine-base.md")"
+    if [ "$code" = "404" ]; then
+      if [ -z "${GH_TOKEN:-}" ]; then
+        printf '%-45s %-20s %s\n' "$repo" "(all)" "UNREADABLE — 404 on every file; private repo? set GH_TOKEN and re-run"
+      else
+        printf '%-45s %-20s %s\n' "$repo" "(all)" "UNREADABLE — 404 on every file even with GH_TOKEN; token lacks access to this repo, or is invalid/expired"
+      fi
+      missing["$repo"]+="(unreadable) "; checked=$((checked + ${#ALL_FILES[@]}))
+      continue
+    fi
+  fi
 
   for f in "${ALL_FILES[@]}"; do
     # Skip the derive variant this repo doesn't carry.
@@ -207,6 +239,22 @@ if [ "${#stale[@]}" -gt 0 ]; then
   for r in "${!stale[@]}"; do echo "  - $r: ${stale[$r]}"; done | sort
   echo "(re-run with --show-diff to see exactly what differs.)"
 fi
+
+for r in "${!missing[@]}"; do
+  case "${missing[$r]}" in *unreadable*)
+    echo
+    if [ -z "${GH_TOKEN:-}" ]; then
+      echo "one or more repos returned 404 on every file. If they are private, export GH_TOKEN"
+      echo "(e.g. GH_TOKEN=\$(gh auth token)) and re-run — raw GitHub needs it to serve them."
+    else
+      echo "one or more repos returned 404 on every file WITH a token set. Either the token can't"
+      echo "read them (scope: repo, not public_repo; fine-grained: include the repo) or it is"
+      echo "invalid/expired — an invalid token 404s even public repos, so if EVERY repo reads"
+      echo "unreadable, the token is the problem."
+    fi
+    break ;;
+  esac
+done
 
 # non-zero exit if anything needs attention (usable as a CI / pre-push gate)
 [ "${#stale[@]}" -eq 0 ] && [ "${#missing[@]}" -eq 0 ] && [ "${#errored[@]}" -eq 0 ]
