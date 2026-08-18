@@ -5,7 +5,7 @@ the conversation that produced them.
 
 A design agreed in chat and never saved is a decision the repo cannot see. A run
 three weeks later has no way to check its work against it, and neither does the
-derive pass reading `project.md`. Saving the file makes "matches the approved
+derive pass reading the brief. Saving the file makes "matches the approved
 mockup" verifiable instead of remembered.
 
 ## What goes here
@@ -15,8 +15,13 @@ PNG is opaque. Standalone HTML with inline styles is ideal — it renders in a
 browser, in the app's code viewer, and reads as text to an agent.
 
 **One file per surface**, named for the surface: `queue-rail.html`,
-`onboard-modal.html`. `project.md`'s Surfaces section references these by path,
-so the names are the link between the brief and the design.
+`onboard-modal.html`. The brief references these by path — `project.md`'s
+Surfaces section on a personal repo, `assignment.md`'s Mockups section on a
+coursework one — so the names are the link between the brief and the design.
+
+On a coursework repo the reference is also a gate: derive parks a visual
+requirement rather than drafting it until a design is committed here AND named
+from `assignment.md`. Committing the file alone is not enough.
 
 ## Delete them once shipped
 
