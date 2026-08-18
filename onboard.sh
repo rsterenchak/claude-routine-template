@@ -645,9 +645,15 @@ esac
 # Assignment-only on purpose: a personal repo's style is whatever its existing
 # code already does, and step 3 skips these silently when they're absent, which
 # is what keeps routine-base.md byte-identical across the whole fleet.
+#
+# docs/mockups/ is scaffolded for BOTH purposes. A coursework PA with a UI needs
+# somewhere to put an approved design as much as a personal project does, and
+# derive parks a visual requirement until one exists — so a repo with no folder
+# and no README is a repo where that park has no obvious resolution.
 if [ "$PURPOSE" = "assignment" ]; then
   TEMPLATE_FILES+=(
     "assignment.md"
+    "mockups-README.md>docs/mockups/README.md"
     ".claude/derive.md"
     ".github/workflows/claude-derive.yml"
     "commenting-style.md>.claude/commenting-style.md"
@@ -665,7 +671,8 @@ else
   # marker AND the explanation — what belongs there (HTML/SVG, not screenshots,
   # since a run can read markup but not a PNG) and the rule that keeps it honest:
   # delete a mockup once its surface ships, because a stale one is worse than
-  # none. project.md's Surfaces section references these files by path.
+  # none. project.md's Surfaces section references these files by path;
+  # assignment.md's Mockups section does the same on a coursework repo.
   TEMPLATE_FILES+=(
     "project.md"
     "mockups-README.md>docs/mockups/README.md"
