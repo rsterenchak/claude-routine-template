@@ -51,8 +51,12 @@ Requirements is guaranteed present:
   this exact PA. Treat it as a hard guardrail: every proposal must avoid these
   failure modes, and it's the highest-signal input in the file.
 - `## Mockups` — optional, and the only section not transcribed from the PA:
-  Robert's own map from an aspect ID to a committed design, one per line
-  (`- A3 — docs/mockups/world-map.html`). Any repo-relative path; the folder is
+  Robert's own map from aspect IDs to a committed design, one design per line
+  (`- A3 — docs/mockups/world-map.html`). A line may carry several
+  comma-separated IDs when one design covers them all
+  (`- B1, B2a, B4 — docs/layouts/README.md`), which is the usual coursework
+  shape: a single written spec governs every page in the site. Read the design
+  once and apply it to each ID on its line. Any repo-relative path; the folder is
   a convention, not a requirement, and coursework often keeps its graded
   wireframes somewhere the PA named instead (`docs/layouts/`).
 
