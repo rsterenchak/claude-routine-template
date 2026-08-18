@@ -52,18 +52,32 @@ Requirements is guaranteed present:
   failure modes, and it's the highest-signal input in the file.
 - `## Mockups` — optional, and the only section not transcribed from the PA:
   Robert's own map from an aspect ID to a committed design, one per line
-  (`- A3 — docs/mockups/world-map.html`).
+  (`- A3 — docs/mockups/world-map.html`). Any repo-relative path; the folder is
+  a convention, not a requirement, and coursework often keeps its graded
+  wireframes somewhere the PA named instead (`docs/layouts/`).
 
 Ignore HTML comments (`<!-- ... -->`) — they're the template's hints, not spec.
 If `assignment.md` is missing, or its Requirements section is empty, write no
 proposals and say so in the closing summary.
 
-**Read any mockup referenced from `## Mockups`.** A path like
-`docs/mockups/world-map.html` is a committed design decision — read the file and
-let it constrain that aspect's proposal, down to the element names and the
-structure it implies. If a referenced mockup does not exist at that path, do not
-invent its design: say so in the proposal's description and keep the entry to
-structure rather than layout.
+**Read any design referenced from `## Mockups`.** A committed design is a
+decision the repo has already made — read it and let it constrain that aspect's
+proposal, down to the element names and the structure it implies. What you can
+read depends on the file:
+
+- **Markup — `.html`, `.svg`** — read it directly. The structure is the spec.
+- **Prose — a `.md` spec** — read it directly and treat it as authoritative. This
+  is the richest case: a written spec states the region contents, ordering, and
+  per-page inventory in a form a proposal can be built from without inference.
+- **An image — `.png`, `.jpg`** — you cannot read it. Look for a written spec
+  beside it (a `README.md` in the same folder is the convention) and read that
+  instead. Coursework wireframes are frequently images because the PA required
+  them that way, and the sibling spec is what makes them actionable.
+
+An image with no sibling spec is not a usable design. Say so in the proposal's
+description and keep the entry to structure rather than layout — do not guess at
+what the picture shows. If a referenced path doesn't resolve at all, treat it the
+same way.
 
 ## Step 2 — read what already exists
 
@@ -145,10 +159,21 @@ relevant starter source, then produce ONE of:
   cleanly to the code). Write one specific `question` tagged with the aspect.
   Don't draft a task around the ambiguity — ask.
 
-- **A mockup park** — the aspect turns on a visible surface and `## Mockups` names
-  no design for it. The rubric grades that the surface exists and works, not how
-  it looks, so drafting one anyway invents layout the PA never specified. Park it
-  with `state:"needs_mockup"` instead: the app files it in the Coverage tab's
+- **A mockup park** — the aspect turns on a visible surface and, after looking,
+  no readable design exists for it.
+
+  **Look before you park.** `## Mockups` is the fast path, not the only one. In
+  order: (1) the `## Mockups` lines; (2) the rest of `assignment.md` — a PA that
+  produced its wireframes in an earlier task usually names where they landed, and
+  that sentence is often in `## Scenario` rather than a section of its own; (3) a
+  design folder in the checkout — `docs/layouts/`, `docs/mockups/`, or whatever
+  the repo actually uses, found with Glob. A written spec found this way is just
+  as authoritative as one named from `## Mockups`; use it, propose from it, and
+  say in the closing summary that it wasn't referenced so Robert can add the line.
+  Parking an aspect whose design was sitting in the repo unreferenced is the worst
+  outcome this step has — it asks him to redo work already done. When the look turns up nothing, the rubric still grades that the surface exists
+  and works, not how it looks — so drafting anyway invents layout the PA never
+  specified. Park it with `state:"needs_mockup"` instead: the app files it in the Coverage tab's
   blocked group, Robert designs it, commits the file, adds the `## Mockups` line,
   and a later derive reads it and proposes properly. Put what you do know in
   `context` — the requirement text, the Competent bar, and any starter markup for
@@ -250,9 +275,11 @@ Rules:
   bypasses RLS — never read or write rows for another project.
 - Transcribe the rubric's aspect IDs; never invent your own numbering.
 - Ambiguous requirement → a question, never a guessed task.
-- Visual aspect with no mockup → a park, never a guessed layout. Read the design
-  `## Mockups` names, or park the aspect; don't split the difference by
-  describing a layout in prose.
+- Visual aspect with no readable design → a park, never a guessed layout. But
+  look first: `## Mockups`, then the rest of the brief, then the checkout's design
+  folder. Park only what a search actually failed to find.
+- Never guess at an image. A `.png` wireframe is opaque; read its sibling spec or
+  treat the design as absent.
 - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
   A `needs_words` question is not coverage: re-read its requirement and propose if
   the spec now answers it, rather than skipping the aspect forever. Nor is a
@@ -264,5 +291,6 @@ Rules:
 End with ONE paragraph: how many aspects the rubric has, how many were already
 covered, how many proposals, questions, and mockup parks you wrote (and for which
 aspect IDs), which aspects you left as manual (process/Git), and which are still
-blocked on an unanswered question or an unmade mockup. If `assignment.md` was
+blocked on an unanswered question or an unmade mockup, and any design you found
+in the checkout that `## Mockups` doesn't reference. If `assignment.md` was
 missing or empty, say so. This paragraph is what surfaces in the run log.
