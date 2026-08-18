@@ -185,10 +185,11 @@ pf_objarr() {
   printf ']'
 }
 # One `stale[]` entry. $2 empty => JSON null (anchor line missing).
-pf_stale_obj() { # $1=file  $2=lines|""  $3=src  $4=test  $5=reason|""
+# $6 = local_edits: "no" (safe to refresh) | "yes" (has local edits) | "unknown".
+pf_stale_obj() { # $1=file  $2=lines|""  $3=src  $4=test  $5=reason|""  $6=local_edits
   local lines="null"; [ -n "$2" ] && lines="$2"
-  printf '{"file":"%s","lines":%s,"src":"%s","test":"%s"' \
-    "$(pf_esc "$1")" "$lines" "$(pf_esc "$3")" "$(pf_esc "$4")"
+  printf '{"file":"%s","lines":%s,"src":"%s","test":"%s","local_edits":"%s"' \
+    "$(pf_esc "$1")" "$lines" "$(pf_esc "$3")" "$(pf_esc "$4")" "$(pf_esc "${6:-unknown}")"
   [ -n "$5" ] && printf ',"reason":"%s"' "$(pf_esc "$5")"
   printf '}'
 }
@@ -210,6 +211,19 @@ else
   fi
 fi
 [ -n "$RC_LIB" ] && . "$RC_LIB"
+# The template's git history, if this script is running inside a full checkout
+# of the template (CI checks it out with fetch-depth 0). It's what lets a stale
+# routine file be proven free of local edits — see rc_local_edits — and so
+# safely refreshed. Absent or shallow, refresh degrades to report-only.
+RC_GITDIR=""
+if [ -f "$SCRIPT_DIR/.claude/routine-base.md" ] && git -C "$SCRIPT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  RC_GITDIR="$SCRIPT_DIR"
+fi
+# ONBOARD_BACKFILL_STALE=1: after creating missing files, also overwrite the
+# checked .claude/ routine files that are stale AND provably unedited locally.
+# Off by default — "existing files are never overwritten" stays the contract
+# unless this is asked for explicitly.
+BACKFILL_STALE="${ONBOARD_BACKFILL_STALE:-}"
 # ─────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────
@@ -762,11 +776,17 @@ for f in "${TEMPLATE_FILES[@]}"; do
               case "$rc_res" in
                 stale:anchor)
                   echo "         ${c_yel}stale${c_rst}  $dest_rel  (anchor line missing — predates the current template)"
-                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "" "" "" "anchor line missing — predates the current template")") ;;
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "" "" "" "anchor line missing — predates the current template" "unknown")") ;;
                 stale:*)
                   IFS=: read -r _ rc_n rc_src rc_test <<< "$rc_res"
-                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (${rc_n} lines differ from the template)"
-                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "$rc_n" "$rc_src" "$rc_test" "")") ;;
+                  rc_le="$(rc_local_edits "$rc_name" "$TARGET/$dest_rel" "$RC_GITDIR" "$rc_src" "$rc_test")"
+                  case "$rc_le" in
+                    no:*)   rc_le_word="no";      rc_le_note="no local edits — safe to refresh" ;;
+                    yes)    rc_le_word="yes";     rc_le_note="has local edits — refresh will skip it" ;;
+                    *)      rc_le_word="unknown"; rc_le_note="local edits unknown — refresh will skip it" ;;
+                  esac
+                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (${rc_n} lines differ from the template; ${rc_le_note})"
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "$rc_n" "$rc_src" "$rc_test" "" "$rc_le_word")") ;;
               esac
             fi
             rm -f "$rc_tmp"
@@ -941,8 +961,48 @@ for f in "${TEMPLATE_FILES[@]}"; do
     failed=$((failed+1))
   fi
 done
+# ── Refresh stale routine files (opt-in) ──────────────────────────────────
+# Only the four checked .claude/ files, only when stale, and only when the
+# repo's copy is provably an older template revision with no local edits
+# (rc_local_edits). A file with local edits, or one whose edits can't be
+# determined, is reported and left exactly as it was — the never-overwrite
+# contract holds for anything this can't prove safe. Refreshed files are
+# written with the dirs they ALREADY use, so nothing but template content
+# changes, and they carry no placeholders for the later subst pass to touch.
+backfilled=0
+if [ -n "$BACKFILL_STALE" ]; then
+  echo "${c_bold}Refresh stale routine files${c_rst}"
+  if [ -z "$RC_LIB" ]; then
+    echo "  ${c_yel}skip${c_rst}   routine-compare.sh unavailable — refresh not attempted."
+  elif [ -z "$RC_GITDIR" ] || [ "$(git -C "$RC_GITDIR" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    echo "  ${c_yel}skip${c_rst}   template history unavailable (not a full template checkout) — cannot prove any file"
+    echo "         free of local edits, so nothing is overwritten. In CI this means onboard.yml's template"
+    echo "         checkout needs fetch-depth: 0."
+  else
+    for rc_name in "${RC_ALL[@]}"; do
+      dest_rel=".claude/$rc_name"; dest="$TARGET/$dest_rel"
+      [ -f "$dest" ] || continue
+      rc_tmp="$(mktemp)"
+      if ! rc_canon="$(rc_canon_path "$SCRIPT_DIR/.claude" "$RAW_BASE" "$rc_name" "$rc_tmp")"; then rm -f "$rc_tmp"; continue; fi
+      rc_res="$(rc_backfill_file "$rc_name" "$rc_canon" "$dest" "$RC_GITDIR")"
+      case "$rc_res" in
+        refreshed:*)
+          IFS=: read -r _ rc_n rc_src rc_test <<< "$rc_res"
+          echo "  ${c_grn}refreshed${c_rst} $dest_rel  (${rc_n} lines; was an unedited older template revision)"
+          files_created+=("$dest_rel"); backfilled=$((backfilled+1)) ;;
+        current)        ;;
+        skip:anchor)    echo "  ${c_yel}skip${c_rst}   $dest_rel  (anchor line missing — dirs can't be inferred; refresh by hand)" ;;
+        skip:local:*)   echo "  ${c_yel}skip${c_rst}   $dest_rel  (${rc_res##*:} lines behind but has local edits — left as is; refresh by hand)" ;;
+        skip:unknown:*) echo "  ${c_yel}skip${c_rst}   $dest_rel  (${rc_res##*:} lines behind, local edits unknown — left as is)" ;;
+      esac
+      rm -f "$rc_tmp"
+    done
+    [ "$backfilled" -eq 0 ] && echo "  ${c_dim}nothing refreshed${c_rst}"
+  fi
+  echo
+fi
 echo
-echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
+echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $backfilled refreshed, $failed failed."
 echo
 fi   # end "$WRITE_FILES" guard around the fetch/write loop
 # ─────────────────────────────────────────────────────────────────
@@ -1389,10 +1449,14 @@ fi
 if [ ${#files_created[@]} -gt 0 ]; then
   # Detect target branch
   TARGET_BRANCH="$(git -C "$TARGET" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+  # The message says what actually happened: scaffold, refresh, or both.
+  if [ "${backfilled:-0}" -gt 0 ] && [ "${created:-0}" -eq 0 ]; then commit_msg="Refresh stale Claude routine files"
+  elif [ "${backfilled:-0}" -gt 0 ]; then commit_msg="Scaffold Claude routine pipeline; refresh stale routine files"
+  else commit_msg="Scaffold Claude routine pipeline"; fi
   # Compose the manual-recovery command block once, used in both branches.
   manual_cmds=$(printf '       cd %s\n' "$TARGET"
                 printf '       git add %s\n' "${files_created[*]}"
-                printf '       git commit -m "Scaffold Claude routine pipeline"\n'
+                printf '       git commit -m "%s"\n' "$commit_msg"
                 printf '       git push origin %s\n' "$TARGET_BRANCH")
   echo "${c_bold}Commit + push${c_rst}"
   echo "  ${#files_created[@]} files ready to commit. Will stage ONLY the files this run created"
@@ -1414,7 +1478,7 @@ if [ ${#files_created[@]} -gt 0 ]; then
         if git -C "$TARGET" diff --staged --quiet; then
           echo "  ${c_dim}nothing to commit (files already in a previous commit, or no changes staged)${c_rst}"
         else
-          if git -C "$TARGET" commit -m "Scaffold Claude routine pipeline" >/dev/null; then
+          if git -C "$TARGET" commit -m "$commit_msg" >/dev/null; then
             echo "  ${c_grn}committed${c_rst} ${#files_created[@]} files to $TARGET_BRANCH"
           else
             echo "  ${c_red}FAILED${c_rst} git commit failed. Manual recovery:"
