@@ -650,10 +650,27 @@ esac
 # somewhere to put an approved design as much as a personal project does, and
 # derive parks a visual requirement until one exists — so a repo with no folder
 # and no README is a repo where that park has no obvious resolution.
+#
+# Unless the repo already keeps its designs somewhere. A PA that produced graded
+# wireframes in an earlier task usually committed them under whatever path it
+# named — docs/layouts/ is the common one — and adding a second empty folder
+# beside it would leave one repo carrying two conventions, which is worse than
+# carrying the non-standard one. derive.md searches for the design folder rather
+# than assuming the path, so the existing one keeps working untouched.
+DESIGN_DIR_FOUND=""
+for _d in docs/mockups docs/layouts docs/wireframes docs/design; do
+  if [ -d "$TARGET/$_d" ]; then DESIGN_DIR_FOUND="$_d"; break; fi
+done
+if [ -n "$DESIGN_DIR_FOUND" ]; then
+  MOCKUPS_README=()
+  echo "${c_yel}note${c_rst}   design folder already present at $DESIGN_DIR_FOUND — not scaffolding docs/mockups/"
+else
+  MOCKUPS_README=( "mockups-README.md>docs/mockups/README.md" )
+fi
 if [ "$PURPOSE" = "assignment" ]; then
   TEMPLATE_FILES+=(
     "assignment.md"
-    "mockups-README.md>docs/mockups/README.md"
+    "${MOCKUPS_README[@]+"${MOCKUPS_README[@]}"}"
     ".claude/derive.md"
     ".github/workflows/claude-derive.yml"
     "commenting-style.md>.claude/commenting-style.md"
@@ -675,7 +692,7 @@ else
   # assignment.md's Mockups section does the same on a coursework repo.
   TEMPLATE_FILES+=(
     "project.md"
-    "mockups-README.md>docs/mockups/README.md"
+    "${MOCKUPS_README[@]+"${MOCKUPS_README[@]}"}"
     ".claude/project-derive.md"
     ".github/workflows/claude-derive.yml"
   )
