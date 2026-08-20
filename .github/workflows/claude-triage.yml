@@ -4,7 +4,7 @@ name: Claude triage
 # name (workflow_dispatch returns no run id — same trick as claude-run.yml).
 # project_id scopes the sweep to one project's flagged tasks: the agent is
 # per-project for now.
-run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }}
+run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }} · ${{ inputs.model || 'default' }}
 
 on:
   workflow_dispatch:
@@ -15,6 +15,10 @@ on:
         required: true
       correlation_id:
         description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+      model:
+        description: resolved model id (empty = workflow default); kimi-*/deepseek-* reroute via the Worker gateway
         type: string
         required: false
   # Optional self-sweep — uncomment to have the agent wake on a schedule and
@@ -46,6 +50,48 @@ jobs:
         with:
           fetch-depth: 1
 
+      # Resolve model routing. A kimi-*/deepseek-* pick reroutes EVERY Claude
+      # Code call this job makes through the Worker's /anthropic gateway
+      # (API-billed at that provider; the subscription is untouched). Vars set
+      # here reach the action step via GITHUB_ENV, and the auth-token + base-URL
+      # pair takes precedence over the oauth input below — the documented
+      # precedence, now load-bearing. Every model var is pinned so background
+      # small-fast / subagent calls can't leak an anthropic-* id into the
+      # gateway (which 400s those loudly by design). Anthropic picks, or no
+      # pick, leave this a logged no-op: plan-billed OAuth exactly as before.
+      - name: Resolve model routing
+        env:
+          MODEL: ${{ inputs.model }}
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+        run: |
+          case "$MODEL" in
+            kimi-*|deepseek-*)
+              if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+                echo "Third-party model '$MODEL' requested but TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing — cannot route. Failing loudly instead of billing the wrong lane."
+                exit 1
+              fi
+              {
+                echo "ANTHROPIC_BASE_URL=${INJECTOR_URL%/}/anthropic"
+                echo "ANTHROPIC_AUTH_TOKEN=$INJECTOR_SECRET"
+                echo "ANTHROPIC_MODEL=$MODEL"
+                echo "ANTHROPIC_SMALL_FAST_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_OPUS_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$MODEL"
+                echo "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
+                echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+                echo "API_TIMEOUT_MS=600000"
+              } >> "$GITHUB_ENV"
+              echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
+              ;;
+            "")
+              echo "No model input — workflow default applies (plan lane)."
+              ;;
+            *)
+              echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
+              ;;
+          esac
       - uses: anthropics/claude-code-action@v1
         env:
           # Supabase REST access for reading flagged rows + writing verdicts back.
@@ -77,7 +123,7 @@ jobs:
           # structurally unreachable rather than merely discouraged by the prompt.
           # Do not re-add Task here without also re-reading the "You are the only
           # actor" section of .claude/triage.md.
-          claude_args: "--max-turns 80 --model claude-sonnet-5 --dangerously-skip-permissions --allowedTools Read,Grep,Glob,Bash"
+          claude_args: "--max-turns 80 --model ${{ inputs.model || 'claude-sonnet-5' }} --dangerously-skip-permissions --allowedTools Read,Grep,Glob,Bash"
           # Temporary: surface the agent's full output while verifying the sweep
           # end-to-end (also how the Worker's run_result reads the closing summary).
           show_full_output: true

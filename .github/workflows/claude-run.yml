@@ -1,7 +1,7 @@
 name: Claude run
 # correlation_id is echoed here so the Worker can find this run by name
 # (workflow_dispatch does not return a run id to the caller).
-run-name: Claude run ${{ inputs.correlation_id }} · ${{ inputs.mode }}
+run-name: Claude run ${{ inputs.correlation_id }} · ${{ inputs.mode }} · ${{ inputs.model || 'default' }}
 on:
   workflow_dispatch:
     inputs:
@@ -18,6 +18,14 @@ on:
         description: opaque id echoed into run-name for status polling
         type: string
         required: false
+      model:
+        description: resolved model id (empty = workflow default); kimi-*/deepseek-* reroute via the Worker gateway
+        type: string
+        required: false
+      auto_merge:
+        description: "'false' = open the PR but do not merge it (third-party proving gate); anything else = merge as always"
+        type: string
+        default: "true"
 permissions:
   contents: write
   pull-requests: write
@@ -34,6 +42,48 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # Resolve model routing. A kimi-*/deepseek-* pick reroutes EVERY Claude
+      # Code call this job makes through the Worker's /anthropic gateway
+      # (API-billed at that provider; the subscription is untouched). Vars set
+      # here reach the action step via GITHUB_ENV, and the auth-token + base-URL
+      # pair takes precedence over the oauth input below — the documented
+      # precedence, now load-bearing. Every model var is pinned so background
+      # small-fast / subagent calls can't leak an anthropic-* id into the
+      # gateway (which 400s those loudly by design). Anthropic picks, or no
+      # pick, leave this a logged no-op: plan-billed OAuth exactly as before.
+      - name: Resolve model routing
+        env:
+          MODEL: ${{ inputs.model }}
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+        run: |
+          case "$MODEL" in
+            kimi-*|deepseek-*)
+              if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+                echo "Third-party model '$MODEL' requested but TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing — cannot route. Failing loudly instead of billing the wrong lane."
+                exit 1
+              fi
+              {
+                echo "ANTHROPIC_BASE_URL=${INJECTOR_URL%/}/anthropic"
+                echo "ANTHROPIC_AUTH_TOKEN=$INJECTOR_SECRET"
+                echo "ANTHROPIC_MODEL=$MODEL"
+                echo "ANTHROPIC_SMALL_FAST_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_OPUS_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$MODEL"
+                echo "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
+                echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+                echo "API_TIMEOUT_MS=600000"
+              } >> "$GITHUB_ENV"
+              echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
+              ;;
+            "")
+              echo "No model input — workflow default applies (plan lane)."
+              ;;
+            *)
+              echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
+              ;;
+          esac
       - uses: anthropics/claude-code-action@v1
         env:
           # Authenticates the gh CLI for the routine's PR-create / auto-merge.
@@ -47,7 +97,7 @@ jobs:
           #   human to approve npm/git/gh commands. Safe here: ephemeral
           #   sandboxed runner, work lands via branch + PR, never on main
           #   directly, and the routine's own constraints bound behavior.
-          claude_args: "--max-turns 150 --model claude-opus-4-8 --dangerously-skip-permissions"
+          claude_args: "--max-turns 150 --model ${{ inputs.model || 'claude-opus-5' }} --dangerously-skip-permissions"
           # Temporary: surface the agent's full output while we verify a real
           # task run end-to-end. Remove once it's landing PRs cleanly.
           show_full_output: true
@@ -55,6 +105,10 @@ jobs:
             You are running an automated code-development routine for this repository.
             Run mode: ${{ inputs.mode }}
             Target entry id (entry mode only): ${{ inputs.entry_id }}
+            Auto-merge mode: ${{ inputs.auto_merge }} — if this is exactly 'false',
+            open the PR as the routine specifies but do NOT merge it and do NOT
+            enable auto-merge; a human merges it manually. Every other routine
+            step (marker reproduction, gh pr view readback, summary) is unchanged.
             Read `.claude/routine-base.md` (the universal routine rules) and
             `.claude/routine.md` (this project's configuration) from the
             repository, then execute the routine exactly as those files
@@ -86,6 +140,31 @@ jobs:
       #
       # continue-on-error: the scan is a convenience. A stale card is not worth
       # failing a run that already shipped its PR successfully.
+      # Manual-merge gate for third-party ships. The routine normally enables
+      # auto-merge on its own PR (routine-base.md); when the dispatcher sends
+      # auto_merge=false the prompt above says not to — but a leash held by the
+      # untrusted party is no leash, so this step enforces it structurally by
+      # stripping auto-merge from any open PR that still carries it. Known
+      # window: a repo with NO required checks can complete a merge inside the
+      # agent step itself, before this step runs — on such repos a 3P ship pick
+      # is a deliberate act, not a default. Graduation path if 3P models prove
+      # undisciplined: move merging out of the routine into a gated workflow
+      # step entirely.
+      - name: Enforce manual-merge gate
+        if: inputs.auto_merge == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prs=$(gh pr list --state open --json number,autoMergeRequest \
+            --jq '.[] | select(.autoMergeRequest != null) | .number' || true)
+          if [ -z "$prs" ]; then
+            echo "Gate active: no open PR has auto-merge enabled — nothing to strip."
+          else
+            for n in $prs; do
+              gh pr merge "$n" --disable-auto && echo "Auto-merge stripped from PR #$n — merge it manually."
+            done
+          fi
+          echo "Third-party ship gate: this run's PR waits for a human merge."
       - name: Refresh refactor scan
         continue-on-error: true
         env:
