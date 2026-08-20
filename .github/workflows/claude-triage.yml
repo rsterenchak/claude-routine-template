@@ -65,8 +65,19 @@ jobs:
           INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
           INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
         run: |
+          # Inverted match: claude-* (and no pick) stay on plan via OAuth;
+          # ANYTHING else routes to the gateway, which allowlists hard. Adding
+          # or swapping a provider is now a Worker-only change — this YAML never
+          # needs another edit for it.
           case "$MODEL" in
-            kimi-*|deepseek-*)
+            claude-*|"")
+              if [ -z "$MODEL" ]; then
+                echo "No model input — workflow default applies (plan lane)."
+              else
+                echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
+              fi
+              ;;
+            *)
               if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
                 echo "Third-party model '$MODEL' requested but TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing — cannot route. Failing loudly instead of billing the wrong lane."
                 exit 1
@@ -84,12 +95,6 @@ jobs:
                 echo "API_TIMEOUT_MS=600000"
               } >> "$GITHUB_ENV"
               echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
-              ;;
-            "")
-              echo "No model input — workflow default applies (plan lane)."
-              ;;
-            *)
-              echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
               ;;
           esac
       - uses: anthropics/claude-code-action@v1
