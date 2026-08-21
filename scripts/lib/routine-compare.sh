@@ -199,6 +199,40 @@ rc_render_pairs() { # $1=in file  $2=out file  [$3..]=NAME=VALUE pairs
   return 0
 }
 
+# Strip a TEMPLATE INSTANTIATION NOTES block — the comment run from an opening
+# "# ──…" rule line whose NEXT line is "# TEMPLATE INSTANTIATION NOTES",
+# through the closing "# ──…" rule — before comparing. The notes are
+# instructions to a HUMAN instantiating by hand: machine-onboarded copies keep
+# them and hand-built originals (the template's own ancestors) never had them,
+# so counting them as drift made the origin repo read 90 lines stale over 3
+# real differences. COMPARE-ONLY: refreshes still write the canonical verbatim,
+# notes included.
+rc_strip_notes() { # $1=in file  $2=out file
+  awk '
+    { if (inblk) { if ($0 ~ /^# ──/) inblk=0; next }
+      if (pend != "") {
+        if ($0 ~ /^# TEMPLATE INSTANTIATION NOTES/) { inblk=1; pend=""; next }
+        print pend; pend=""
+      }
+      if ($0 ~ /^# ──/) { pend=$0; next }
+      print }
+    END { if (pend != "") print pend }
+  ' "$1" > "$2"
+  return 0
+}
+
+# Notes-blind compare of two files. Prints the count of differing lines after
+# rc_strip_notes on both sides; 0 means effectively identical.
+rc_stripped_diff() { # $1=file A  $2=file B
+  local a b n; a="$(mktemp)"; b="$(mktemp)"
+  rc_strip_notes "$1" "$a"
+  rc_strip_notes "$2" "$b"
+  n="$(diff "$a" "$b" | grep -cE '^[<>]' || true)"
+  rm -f "$a" "$b"
+  printf '%s' "$n"
+  return 0
+}
+
 # Resolve the canonical copy of ANY template file by its SRC-relative path.
 # Same contract as rc_canon_path (caller owns $4), without the .claude/ prefix.
 rc_canon_path_any() { # $1=template checkout root (may be "")  $2=RAW_BASE-style URL prefix  $3=SRC rel path  $4=temp path for a fetch
@@ -219,16 +253,19 @@ rc_local_edits_path() { # $1=SRC rel path  $2=repo file  $3=template git dir (""
   if [ "$(git -C "$gitdir" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then printf 'unknown\n'; return 0; fi
   local shas; shas="$(git -C "$gitdir" log --format=%H -- "$src" 2>/dev/null || true)"
   [ -n "$shas" ] || { printf 'unknown\n'; return 0; }
-  local raw cand sha; raw="$(mktemp)"; cand="$(mktemp)"
+  local raw cand rstrip cstrip sha
+  raw="$(mktemp)"; cand="$(mktemp)"; rstrip="$(mktemp)"; cstrip="$(mktemp)"
+  rc_strip_notes "$repo" "$rstrip"
   for sha in $shas; do
     if git -C "$gitdir" show "$sha:$src" > "$raw" 2>/dev/null; then
       rc_render_pairs "$raw" "$cand" "$@"
-      if diff -q "$cand" "$repo" >/dev/null 2>&1; then
-        rm -f "$raw" "$cand"; printf 'no:%s\n' "$sha"; return 0
+      rc_strip_notes "$cand" "$cstrip"
+      if diff -q "$cstrip" "$rstrip" >/dev/null 2>&1; then
+        rm -f "$raw" "$cand" "$rstrip" "$cstrip"; printf 'no:%s\n' "$sha"; return 0
       fi
     fi
   done
-  rm -f "$raw" "$cand"; printf 'yes\n'; return 0
+  rm -f "$raw" "$cand" "$rstrip" "$cstrip"; printf 'yes\n'; return 0
 }
 
 # rc_backfill_file for a file at an arbitrary SRC path. Compares against — and
@@ -240,8 +277,10 @@ rc_backfill_path() { # $1=SRC rel path  $2=canon path  $3=repo file  $4=template
   shift 4
   local rendered; rendered="$(mktemp)"
   rc_render_pairs "$canon" "$rendered" "$@"
-  if diff -q "$rendered" "$repo" >/dev/null 2>&1; then rm -f "$rendered"; printf 'current\n'; return 0; fi
-  local n; n="$(diff "$rendered" "$repo" | grep -cE '^[<>]' || true)"
+  # Notes-blind: see rc_strip_notes. The write below still uses the rendered
+  # canonical verbatim; only the compare and the count ignore the notes.
+  local n; n="$(rc_stripped_diff "$rendered" "$repo")"
+  if [ "$n" = "0" ]; then rm -f "$rendered"; printf 'current\n'; return 0; fi
   local le; le="$(rc_local_edits_path "$src" "$repo" "$gitdir" "$@")"
   case "$le" in
     no:*) cp "$rendered" "$repo"; rm -f "$rendered"; printf 'refreshed:%s::\n' "$n" ;;
