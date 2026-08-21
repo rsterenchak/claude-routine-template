@@ -169,11 +169,35 @@ rc_backfill_file() { # $1=file name  $2=canon path  $3=repo file  $4=template gi
 
 # ── Workflow tier ─────────────────────────────────────────────────────────────
 #
-# The verbatim treatment, generalized to any repo path. Used by onboard.sh for
-# the managed .github/workflows/*.yml files, whose canonical copies live at the
-# template ROOT (not .claude/) and whose history is walked at the SRC path —
-# which matters for the SRC>DEST renames: a repo's test.yml is proven unedited
-# by matching revisions of test-dotnet.yml (or whichever SRC installed it).
+# The generalized treatment for the managed .github/workflows/*.yml files,
+# whose canonical copies live at the template ROOT (not .claude/) and whose
+# history is walked at the SRC path — which matters for the SRC>DEST renames:
+# a repo's test.yml is proven unedited by matching revisions of
+# test-dotnet.yml (or whichever SRC installed it).
+#
+# Some of these are TEMPLATED like triage.md — test.yml, deploy.yml, and
+# friends carry {{WORKING_DIR}}/{{INSTALL_COMMAND}}-style placeholders filled
+# at onboard time — so both functions below take optional NAME=VALUE pairs and
+# render every template revision (and the canonical) with them before any
+# byte-compare. With no pairs, rendering is the identity and this is the plain
+# verbatim walk. The pairs come from onboard.sh's wf_backfill_pairs, the early
+# mirror of its section-4b substitution rules.
+
+# Render {{KEY}} -> value pairs from $3.. into a copy of $1 at $2. Zero pairs
+# (or a file with no placeholders) makes this a plain copy. Same sed idiom as
+# onboard.sh's subst().
+rc_render_pairs() { # $1=in file  $2=out file  [$3..]=NAME=VALUE pairs
+  local out="$2"
+  cp "$1" "$out"
+  shift 2
+  local pair k v esc
+  for pair in "$@"; do
+    k="${pair%%=*}"; v="${pair#*=}"
+    esc="$(rc_sed_escape "$v")"
+    sed -i.bak "s|{{$k}}|$esc|g" "$out" && rm -f "$out.bak"
+  done
+  return 0
+}
 
 # Resolve the canonical copy of ANY template file by its SRC-relative path.
 # Same contract as rc_canon_path (caller owns $4), without the .claude/ prefix.
@@ -184,36 +208,45 @@ rc_canon_path_any() { # $1=template checkout root (may be "")  $2=RAW_BASE-style
   return 1
 }
 
-# rc_local_edits for a verbatim file at an arbitrary SRC path: walk the
-# template's history for SRC and byte-compare each revision to the repo's copy.
-# Same output vocabulary (no:<sha> / yes / unknown), same shallow-clone guard.
-rc_local_edits_path() { # $1=SRC rel path  $2=repo file  $3=template git dir ("" if none)
+# rc_local_edits for a file at an arbitrary SRC path: walk the template's
+# history for SRC, render each revision with the given pairs, and byte-compare
+# to the repo's copy. Same output vocabulary (no:<sha> / yes / unknown), same
+# shallow-clone guard.
+rc_local_edits_path() { # $1=SRC rel path  $2=repo file  $3=template git dir ("" if none)  [$4..]=NAME=VALUE pairs
   local src="$1" repo="$2" gitdir="$3"
+  shift 3
   { [ -n "$gitdir" ] && git -C "$gitdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; } || { printf 'unknown\n'; return 0; }
   if [ "$(git -C "$gitdir" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then printf 'unknown\n'; return 0; fi
   local shas; shas="$(git -C "$gitdir" log --format=%H -- "$src" 2>/dev/null || true)"
   [ -n "$shas" ] || { printf 'unknown\n'; return 0; }
-  local cand sha; cand="$(mktemp)"
+  local raw cand sha; raw="$(mktemp)"; cand="$(mktemp)"
   for sha in $shas; do
-    if git -C "$gitdir" show "$sha:$src" > "$cand" 2>/dev/null \
-       && diff -q "$cand" "$repo" >/dev/null 2>&1; then
-      rm -f "$cand"; printf 'no:%s\n' "$sha"; return 0
+    if git -C "$gitdir" show "$sha:$src" > "$raw" 2>/dev/null; then
+      rc_render_pairs "$raw" "$cand" "$@"
+      if diff -q "$cand" "$repo" >/dev/null 2>&1; then
+        rm -f "$raw" "$cand"; printf 'no:%s\n' "$sha"; return 0
+      fi
     fi
   done
-  rm -f "$cand"; printf 'yes\n'; return 0
+  rm -f "$raw" "$cand"; printf 'yes\n'; return 0
 }
 
-# rc_backfill_file for a verbatim file at an arbitrary SRC path. Same output
-# vocabulary; no anchor case (nothing is templated here).
-rc_backfill_path() { # $1=SRC rel path  $2=canon path  $3=repo file  $4=template git dir
+# rc_backfill_file for a file at an arbitrary SRC path. Compares against — and
+# on refresh, writes — the canonical RENDERED with the given pairs, so a
+# templated workflow never lands in a repo with literal {{...}} in it. Same
+# output vocabulary; no anchor case (values come from the caller, not the file).
+rc_backfill_path() { # $1=SRC rel path  $2=canon path  $3=repo file  $4=template git dir  [$5..]=NAME=VALUE pairs
   local src="$1" canon="$2" repo="$3" gitdir="$4"
-  if diff -q "$canon" "$repo" >/dev/null 2>&1; then printf 'current\n'; return 0; fi
-  local n; n="$(diff "$canon" "$repo" | grep -cE '^[<>]' || true)"
-  local le; le="$(rc_local_edits_path "$src" "$repo" "$gitdir")"
+  shift 4
+  local rendered; rendered="$(mktemp)"
+  rc_render_pairs "$canon" "$rendered" "$@"
+  if diff -q "$rendered" "$repo" >/dev/null 2>&1; then rm -f "$rendered"; printf 'current\n'; return 0; fi
+  local n; n="$(diff "$rendered" "$repo" | grep -cE '^[<>]' || true)"
+  local le; le="$(rc_local_edits_path "$src" "$repo" "$gitdir" "$@")"
   case "$le" in
-    no:*) cp "$canon" "$repo"; printf 'refreshed:%s::\n' "$n" ;;
-    yes)  printf 'skip:local:%s\n' "$n" ;;
-    *)    printf 'skip:unknown:%s\n' "$n" ;;
+    no:*) cp "$rendered" "$repo"; rm -f "$rendered"; printf 'refreshed:%s::\n' "$n" ;;
+    yes)  rm -f "$rendered"; printf 'skip:local:%s\n' "$n" ;;
+    *)    rm -f "$rendered"; printf 'skip:unknown:%s\n' "$n" ;;
   esac
   return 0
 }
