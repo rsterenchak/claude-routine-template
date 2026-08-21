@@ -803,6 +803,18 @@ for f in "${TEMPLATE_FILES[@]}"; do
             fi
             rm -f "$rc_tmp"
           fi ;;
+        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*)
+          gm_src="${f%%>*}"
+          rc_tmp="$(mktemp)"
+          gm_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$gm_src" "$rc_tmp")" || gm_canon=""
+          if [ -n "$gm_canon" ]; then
+            gm_n="$(rc_stripped_diff "$gm_canon" "$TARGET/$dest_rel")"
+            if [ "$gm_n" != "0" ]; then
+              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${gm_n} lines differ from the template)"
+              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$gm_n" "$gm_src" "generator" "")")
+            fi
+          fi
+          rm -f "$rc_tmp" ;;
         .github/workflows/*.yml)
           # Compare at the SRC path (handles SRC>DEST renames: the canonical
           # for a repo's test.yml is the template's test-dotnet.yml or
@@ -1003,9 +1015,11 @@ for f in "${TEMPLATE_FILES[@]}"; do
     # detection and backfill"): a file is overwritten ONLY when its bytes
     # match SOME revision of its template source — provably an older template
     # copy, nothing lost. Everything else is held back and reported. Scope is
-    # the checked .claude/ routine files plus the managed workflow YAMLs;
-    # CLAUDE.md, routine.md, and the generators are never candidates
-    # (customized per repo by design — no canonical form to refresh toward).
+    # the checked .claude/ routine files, the managed workflow YAMLs, and the
+    # manifest generators (verbatim template copies — a stale one silently
+    # publishes a manifest without lens/types and the Structure tab's second
+    # lens never lights up). CLAUDE.md and routine.md are never candidates:
+    # customized per repo by design, no canonical form to refresh toward.
     bf_res=""
     if [ -n "${ONBOARD_BACKFILL_STALE:-}" ] && [ -n "$RC_LIB" ]; then
       case "$dest_rel" in
@@ -1019,6 +1033,15 @@ for f in "${TEMPLATE_FILES[@]}"; do
             fi
             rm -f "$bf_tmp"
           fi ;;
+        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*)
+          # Verbatim, no placeholders; dest may be WORKING_DIR-prefixed (see
+          # dest_path_for) while history is walked at the plain SRC path.
+          bf_tmp="$(mktemp)"
+          bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
+          if [ -n "$bf_canon" ]; then
+            bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR")"
+          fi
+          rm -f "$bf_tmp" ;;
         .github/workflows/*.yml)
           bf_tmp="$(mktemp)"
           bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
