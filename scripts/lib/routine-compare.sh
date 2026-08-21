@@ -28,6 +28,11 @@
 # NOT checked: routine.md. Fourteen placeholders, hand-completed after onboard,
 # per-repo by design. There is no canonical form for it to drift from.
 #
+# A third tier lives at the bottom of this file: the managed workflow YAMLs
+# (.github/workflows/*), verbatim copies at arbitrary repo paths, some renamed
+# at onboard time (SRC>DEST). Same canonical resolution and history walk as
+# routine-base.md, generalized to any path, with no {{...}} substitution.
+#
 # Requires: bash 4+, sed, diff, and curl only when the fetch fallback fires.
 
 # The checked set. RC_ALL is the report order.
@@ -158,6 +163,57 @@ rc_backfill_file() { # $1=file name  $2=canon path  $3=repo file  $4=template gi
       printf 'refreshed:%s:%s:%s\n' "$n" "$src" "$test" ;;
     yes)   printf 'skip:local:%s\n' "$n" ;;
     *)     printf 'skip:unknown:%s\n' "$n" ;;
+  esac
+  return 0
+}
+
+# ── Workflow tier ─────────────────────────────────────────────────────────────
+#
+# The verbatim treatment, generalized to any repo path. Used by onboard.sh for
+# the managed .github/workflows/*.yml files, whose canonical copies live at the
+# template ROOT (not .claude/) and whose history is walked at the SRC path —
+# which matters for the SRC>DEST renames: a repo's test.yml is proven unedited
+# by matching revisions of test-dotnet.yml (or whichever SRC installed it).
+
+# Resolve the canonical copy of ANY template file by its SRC-relative path.
+# Same contract as rc_canon_path (caller owns $4), without the .claude/ prefix.
+rc_canon_path_any() { # $1=template checkout root (may be "")  $2=RAW_BASE-style URL prefix  $3=SRC rel path  $4=temp path for a fetch
+  if [ -n "${1:-}" ] && [ -f "$1/$3" ]; then printf '%s' "$1/$3"; return 0; fi
+  [ -n "${2:-}" ] && [ -n "${4:-}" ] || return 1
+  if curl -fsSL "$2/$3" -o "$4" 2>/dev/null; then printf '%s' "$4"; return 0; fi
+  return 1
+}
+
+# rc_local_edits for a verbatim file at an arbitrary SRC path: walk the
+# template's history for SRC and byte-compare each revision to the repo's copy.
+# Same output vocabulary (no:<sha> / yes / unknown), same shallow-clone guard.
+rc_local_edits_path() { # $1=SRC rel path  $2=repo file  $3=template git dir ("" if none)
+  local src="$1" repo="$2" gitdir="$3"
+  { [ -n "$gitdir" ] && git -C "$gitdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; } || { printf 'unknown\n'; return 0; }
+  if [ "$(git -C "$gitdir" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then printf 'unknown\n'; return 0; fi
+  local shas; shas="$(git -C "$gitdir" log --format=%H -- "$src" 2>/dev/null || true)"
+  [ -n "$shas" ] || { printf 'unknown\n'; return 0; }
+  local cand sha; cand="$(mktemp)"
+  for sha in $shas; do
+    if git -C "$gitdir" show "$sha:$src" > "$cand" 2>/dev/null \
+       && diff -q "$cand" "$repo" >/dev/null 2>&1; then
+      rm -f "$cand"; printf 'no:%s\n' "$sha"; return 0
+    fi
+  done
+  rm -f "$cand"; printf 'yes\n'; return 0
+}
+
+# rc_backfill_file for a verbatim file at an arbitrary SRC path. Same output
+# vocabulary; no anchor case (nothing is templated here).
+rc_backfill_path() { # $1=SRC rel path  $2=canon path  $3=repo file  $4=template git dir
+  local src="$1" canon="$2" repo="$3" gitdir="$4"
+  if diff -q "$canon" "$repo" >/dev/null 2>&1; then printf 'current\n'; return 0; fi
+  local n; n="$(diff "$canon" "$repo" | grep -cE '^[<>]' || true)"
+  local le; le="$(rc_local_edits_path "$src" "$repo" "$gitdir")"
+  case "$le" in
+    no:*) cp "$canon" "$repo"; printf 'refreshed:%s::\n' "$n" ;;
+    yes)  printf 'skip:local:%s\n' "$n" ;;
+    *)    printf 'skip:unknown:%s\n' "$n" ;;
   esac
   return 0
 }
