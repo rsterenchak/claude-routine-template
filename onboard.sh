@@ -815,8 +815,12 @@ for f in "${TEMPLATE_FILES[@]}"; do
           wf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$wf_src" "$rc_tmp")" || wf_canon=""
           if [ -n "$wf_canon" ]; then
             rc_render_pairs "$wf_canon" "$wf_rt" "${WF_PAIRS[@]}"
-            if ! diff -q "$wf_rt" "$TARGET/$dest_rel" >/dev/null 2>&1; then
-              wf_n="$(diff "$wf_rt" "$TARGET/$dest_rel" | grep -cE '^[<>]' || true)"
+            # Notes-blind count (see rc_strip_notes): the instantiation-notes
+            # block is instructions to a human, not pipeline substance —
+            # without this the template's origin repo read ~90 stale lines
+            # over 3 real ones.
+            wf_n="$(rc_stripped_diff "$wf_rt" "$TARGET/$dest_rel")"
+            if [ "$wf_n" != "0" ]; then
               echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template)"
               PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "")")
             fi
