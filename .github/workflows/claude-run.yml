@@ -85,6 +85,13 @@ jobs:
                 echo "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
                 echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
                 echo "API_TIMEOUT_MS=600000"
+                # Usage attribution, no secrets: Claude Code sends this header
+                # on every gateway request; the Worker resolves the repo to its
+                # registered owner and records the run's tokens against them.
+                # correlation_id ties the usage rows to this exact run; the
+                # expression is empty on workflows without that input, which
+                # the Worker treats as repo-only attribution.
+                echo "ANTHROPIC_CUSTOM_HEADERS=X-Void-Attr: repo=${GITHUB_REPOSITORY}; corr=${{ inputs.correlation_id }}"
               } >> "$GITHUB_ENV"
               echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
               ;;
