@@ -124,6 +124,11 @@ TEMPLATE_FILES=()  # assembled after shape detection
 # later for selective `git add` so the auto-commit-push step never sweeps up
 # files the script didn't author.
 files_created=()
+# Backfill bookkeeping (ONBOARD_BACKFILL_STALE): files this run refreshed to
+# the current template (staged for commit alongside files_created), and stale
+# files held back because local edits couldn't be ruled out (reported only).
+files_refreshed=()
+files_heldback=()
 WRITE_FILES=true   # set by the create-prompt below; may flip false to skip writes
 # ─────────────────────────────────────────────────────────────────
 # Preflight (ONBOARD_PREFLIGHT=1): report-only. Runs detection and the
@@ -747,9 +752,10 @@ for f in "${TEMPLATE_FILES[@]}"; do
     echo "  ${c_yel}skip${c_rst}   $dest_rel  (already exists)"
     PF_SKIP+=("$dest_rel")
     # Preflight only: an existing routine file is not necessarily a CURRENT
-    # one. Compare the four checked .claude/ files against the template's copy
-    # (see scripts/lib/routine-compare.sh for the two tiers). Anything else
-    # that already exists is left as a plain skip, as before.
+    # one. Compare the four checked .claude/ files AND the managed workflow
+    # YAMLs against the template's copy (see scripts/lib/routine-compare.sh
+    # for the tiers). Anything else that already exists is left as a plain
+    # skip, as before.
     if [ -n "$PREFLIGHT" ] && [ -n "$RC_LIB" ]; then
       case "$dest_rel" in
         .claude/*.md)
@@ -771,6 +777,19 @@ for f in "${TEMPLATE_FILES[@]}"; do
             fi
             rm -f "$rc_tmp"
           fi ;;
+        .github/workflows/*.yml)
+          # Verbatim compare at the SRC path (handles SRC>DEST renames: the
+          # canonical for a repo's test.yml is the template's test-dotnet.yml
+          # or whichever variant this shape installs).
+          wf_src="${f%%>*}"
+          rc_tmp="$(mktemp)"
+          wf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$wf_src" "$rc_tmp")" || wf_canon=""
+          if [ -n "$wf_canon" ] && ! diff -q "$wf_canon" "$TARGET/$dest_rel" >/dev/null 2>&1; then
+            wf_n="$(diff "$wf_canon" "$TARGET/$dest_rel" | grep -cE '^[<>]' || true)"
+            echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template)"
+            PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "")")
+          fi
+          rm -f "$rc_tmp" ;;
       esac
     fi
   else
@@ -943,6 +962,55 @@ for f in "${TEMPLATE_FILES[@]}"; do
   dest_rel="$(dest_path_for "$dest_rel")"
   dest="$TARGET/$dest_rel"
   if [ -e "$dest" ]; then
+    # ONBOARD_BACKFILL_STALE: the write half of preflight's stale listing.
+    # The proof machinery lives in scripts/lib/routine-compare.sh ("Local-edit
+    # detection and backfill"): a file is overwritten ONLY when its bytes
+    # match SOME revision of its template source — provably an older template
+    # copy, nothing lost. Everything else is held back and reported. Scope is
+    # the checked .claude/ routine files plus the managed workflow YAMLs;
+    # CLAUDE.md, routine.md, and the generators are never candidates
+    # (customized per repo by design — no canonical form to refresh toward).
+    bf_res=""
+    if [ -n "${ONBOARD_BACKFILL_STALE:-}" ] && [ -n "$RC_LIB" ]; then
+      case "$dest_rel" in
+        .claude/*.md)
+          bf_name="${dest_rel#.claude/}"
+          if rc_is_checked "$bf_name"; then
+            bf_tmp="$(mktemp)"
+            bf_canon="$(rc_canon_path "$SCRIPT_DIR/.claude" "$RAW_BASE" "$bf_name" "$bf_tmp")" || bf_canon=""
+            if [ -n "$bf_canon" ]; then
+              bf_res="$(rc_backfill_file "$bf_name" "$bf_canon" "$dest" "$SCRIPT_DIR")"
+            fi
+            rm -f "$bf_tmp"
+          fi ;;
+        .github/workflows/*.yml)
+          bf_tmp="$(mktemp)"
+          bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
+          if [ -n "$bf_canon" ]; then
+            bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR")"
+          fi
+          rm -f "$bf_tmp" ;;
+      esac
+    fi
+    case "$bf_res" in
+      refreshed:*)
+        bf_n="${bf_res#refreshed:}"; bf_n="${bf_n%%:*}"
+        echo "  ${c_grn}refreshed${c_rst} $dest_rel  (${bf_n} stale lines, provably unedited — now current)"
+        files_refreshed+=("$dest_rel")
+        continue ;;
+      skip:local:*)
+        echo "  ${c_yel}held${c_rst}    $dest_rel  (stale but carries local edits — left alone)"
+        files_heldback+=("$dest_rel")
+        skipped=$((skipped+1)); continue ;;
+      skip:unknown:*)
+        echo "  ${c_yel}held${c_rst}    $dest_rel  (stale; no template history to prove it unedited — left alone)"
+        files_heldback+=("$dest_rel")
+        skipped=$((skipped+1)); continue ;;
+      skip:anchor)
+        echo "  ${c_yel}held${c_rst}    $dest_rel  (anchor line missing — dirs can't be inferred; left alone)"
+        files_heldback+=("$dest_rel")
+        skipped=$((skipped+1)); continue ;;
+    esac
     skipped=$((skipped+1))
     continue
   fi
@@ -957,7 +1025,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   fi
 done
 echo
-echo "${c_bold}Summary:${c_rst} $created created, $skipped skipped (existed), $failed failed."
+echo "${c_bold}Summary:${c_rst} $created created, ${#files_refreshed[@]} refreshed, $skipped skipped (existed; ${#files_heldback[@]} held back), $failed failed."
 echo
 fi   # end "$WRITE_FILES" guard around the fetch/write loop
 # ─────────────────────────────────────────────────────────────────
@@ -1389,7 +1457,8 @@ if [ "${CODESPACES:-}" = "true" ]; then
 fi
 # ─────────────────────────────────────────────────────────────────
 # 4e. Auto-commit-and-push the scaffolded files
-# Stages only the files this run created (tracked in files_created), so any
+# Stages only the files this run created or refreshed (files_created +
+# files_refreshed), so any
 # other untracked files in the target repo are left untouched. Detects the
 # target's current branch via symbolic-ref; falls back to "main" if HEAD is
 # detached. Prompts before staging so the user can decline and review.
@@ -1401,23 +1470,29 @@ fi
 # diagnostics aren't hidden. A failed push doesn't abort the script — the
 # Remaining Manual Steps block still prints, and the user can re-attempt.
 # ─────────────────────────────────────────────────────────────────
-if [ ${#files_created[@]} -gt 0 ]; then
+if [ $(( ${#files_created[@]} + ${#files_refreshed[@]} )) -gt 0 ]; then
   # Detect target branch
   TARGET_BRANCH="$(git -C "$TARGET" symbolic-ref --short HEAD 2>/dev/null || echo "main")"
+  # One staging set: scaffolded and refreshed files ride the same commit.
+  commit_files=( "${files_created[@]}" "${files_refreshed[@]}" )
+  commit_msg="Scaffold Claude routine pipeline"
+  if [ ${#files_refreshed[@]} -gt 0 ]; then
+    commit_msg="Scaffold/refresh Claude routine pipeline (${#files_refreshed[@]} refreshed)"
+  fi
   # Compose the manual-recovery command block once, used in both branches.
   manual_cmds=$(printf '       cd %s\n' "$TARGET"
-                printf '       git add %s\n' "${files_created[*]}"
-                printf '       git commit -m "Scaffold Claude routine pipeline"\n'
+                printf '       git add %s\n' "${commit_files[*]}"
+                printf '       git commit -m "%s"\n' "$commit_msg"
                 printf '       git push origin %s\n' "$TARGET_BRANCH")
   echo "${c_bold}Commit + push${c_rst}"
-  echo "  ${#files_created[@]} files ready to commit. Will stage ONLY the files this run created"
+  echo "  ${#commit_files[@]} files ready to commit. Will stage ONLY the files this run created or refreshed"
   echo "  (other untracked files in the target are left alone). Target branch: ${c_bold}$TARGET_BRANCH${c_rst}"
   ni_read commit_confirm "  Commit and push the scaffolded files to $TARGET_BRANCH now? [Y/n] " "y"
   case "$commit_confirm" in
     ""|[yY]|[yY][eE][sS])
       # Stage only files this run authored. Use -C so we don't have to cd.
       stage_failed=false
-      for rel in "${files_created[@]}"; do
+      for rel in "${commit_files[@]}"; do
         git -C "$TARGET" add -- "$rel" || stage_failed=true
       done
       if [ "$stage_failed" = "true" ]; then
@@ -1429,8 +1504,8 @@ if [ ${#files_created[@]} -gt 0 ]; then
         if git -C "$TARGET" diff --staged --quiet; then
           echo "  ${c_dim}nothing to commit (files already in a previous commit, or no changes staged)${c_rst}"
         else
-          if git -C "$TARGET" commit -m "Scaffold Claude routine pipeline" >/dev/null; then
-            echo "  ${c_grn}committed${c_rst} ${#files_created[@]} files to $TARGET_BRANCH"
+          if git -C "$TARGET" commit -m "$commit_msg" >/dev/null; then
+            echo "  ${c_grn}committed${c_rst} ${#commit_files[@]} files to $TARGET_BRANCH"
           else
             echo "  ${c_red}FAILED${c_rst} git commit failed. Manual recovery:"
             echo "$manual_cmds"
