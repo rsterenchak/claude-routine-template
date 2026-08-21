@@ -740,6 +740,32 @@ else
     ".github/workflows/claude-derive.yml"
   )
 fi
+# The workflow-placeholder values, derived from EARLY primitives only (shape +
+# detection), for the preflight stale compare and the backfill render — both
+# run before the interview-laced VALUE block in section 4b can. Same duty as
+# the pf_install mirror above the preflight JSON: if 4b's rules change, or a
+# template workflow gains a {{TOKEN}}, change this too or the compare lies.
+# DOTNET_VERSION uses the env/default here; an interview-picked custom version
+# makes a rendered mismatch and the file is held back — conservative, correct.
+wf_backfill_pairs() {
+  local sp="${SRC_PREFIX:-}"
+  printf 'WORKING_DIR=%s\n'       "${WORKING_DIR:-.}"
+  printf 'MANIFEST_VARIANT=%s\n'  "${MANIFEST_VARIANT:-}"
+  printf 'MANIFEST_SRC_ROOT=%s\n' "${sp%/}"
+  printf 'DOTNET_VERSION=%s\n'    "${ONBOARD_DOTNET:-10.0.x}"
+  case "$SHAPE" in
+    console|desktop|maui)
+      printf 'INSTALL_COMMAND=dotnet restore\nTEST_COMMAND=dotnet test\nBUILD_COMMAND=dotnet build\n' ;;
+    sql|repo-only)
+      printf 'INSTALL_COMMAND=none\nTEST_COMMAND=none\nBUILD_COMMAND=none\n' ;;
+    *)
+      local t="${TEST_CMD:-npm test}";       [ "${t#\(}" != "$t" ] && t="npm test"
+      local b="${BUILD_CMD:-npm run build}"; [ "${b#\(}" != "$b" ] && b="npm run build"
+      printf 'INSTALL_COMMAND=npm install\nTEST_COMMAND=%s\nBUILD_COMMAND=%s\n' "$t" "$b" ;;
+  esac
+  return 0
+}
+mapfile -t WF_PAIRS < <(wf_backfill_pairs)
 echo "${c_bold}Files to create${c_rst} (existing files will be SKIPPED, never overwritten):"
 for f in "${TEMPLATE_FILES[@]}"; do
   # Entries may be "SRC>DEST" (fetch SRC from template, write as DEST in target).
@@ -778,18 +804,24 @@ for f in "${TEMPLATE_FILES[@]}"; do
             rm -f "$rc_tmp"
           fi ;;
         .github/workflows/*.yml)
-          # Verbatim compare at the SRC path (handles SRC>DEST renames: the
-          # canonical for a repo's test.yml is the template's test-dotnet.yml
-          # or whichever variant this shape installs).
+          # Compare at the SRC path (handles SRC>DEST renames: the canonical
+          # for a repo's test.yml is the template's test-dotnet.yml or
+          # whichever variant this shape installs), RENDERED with the repo's
+          # placeholder values first — a current test.yml differs from the raw
+          # template on every substituted line, and comparing raw would flag
+          # it stale forever.
           wf_src="${f%%>*}"
-          rc_tmp="$(mktemp)"
+          rc_tmp="$(mktemp)"; wf_rt="$(mktemp)"
           wf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$wf_src" "$rc_tmp")" || wf_canon=""
-          if [ -n "$wf_canon" ] && ! diff -q "$wf_canon" "$TARGET/$dest_rel" >/dev/null 2>&1; then
-            wf_n="$(diff "$wf_canon" "$TARGET/$dest_rel" | grep -cE '^[<>]' || true)"
-            echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template)"
-            PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "")")
+          if [ -n "$wf_canon" ]; then
+            rc_render_pairs "$wf_canon" "$wf_rt" "${WF_PAIRS[@]}"
+            if ! diff -q "$wf_rt" "$TARGET/$dest_rel" >/dev/null 2>&1; then
+              wf_n="$(diff "$wf_rt" "$TARGET/$dest_rel" | grep -cE '^[<>]' || true)"
+              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template)"
+              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "")")
+            fi
           fi
-          rm -f "$rc_tmp" ;;
+          rm -f "$rc_tmp" "$wf_rt" ;;
       esac
     fi
   else
@@ -987,7 +1019,9 @@ for f in "${TEMPLATE_FILES[@]}"; do
           bf_tmp="$(mktemp)"
           bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
           if [ -n "$bf_canon" ]; then
-            bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR")"
+            # WF_PAIRS renders the templated workflows (test.yml, deploy.yml,
+            # …) the way 4b would; placeholder-free ones render as identity.
+            bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR" "${WF_PAIRS[@]}")"
           fi
           rm -f "$bf_tmp" ;;
       esac
