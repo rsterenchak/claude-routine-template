@@ -232,6 +232,23 @@ Entries in `TODO.md` follow a strict format because an automated parser reads th
 
 ---
 
+## Placeholder text
+
+- Any generated prose longer than one sentence (page copy, section descriptions,
+  marketing text, sample paragraphs, about/intro blocks) must be lorem ipsum,
+  not real content.
+- Rationale: real copy is authored manually and swapped in at will later.
+  Agent-written prose creates review burden and risks shipping unvetted wording.
+  Do not "improve" lorem ipsum blocks into real text — that is a regression,
+  not a fix.
+- Exception: single-sentence strings stay real and meaningful — labels, buttons,
+  headings, nav items, alt text, error messages, form hints, table headers.
+- On coursework repos: lorem ipsum is a build-time convention only. Real content
+  must be swapped in before submission — evaluators grade the copy. Treat the
+  swap as a mandatory pre-submission step.
+
+---
+
 ## Operating principles worth banking
 
 **Don't pre-add prompt clauses for hypothetical failures.** Add them when a specific pattern bites and add only what would catch that specific pattern. Pre-adding clauses produces prompt bloat that degrades response quality.
