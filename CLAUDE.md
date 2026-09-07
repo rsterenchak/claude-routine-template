@@ -250,6 +250,11 @@ Entries in `TODO.md` follow a strict format because an automated parser reads th
 - On coursework repos: lorem ipsum is a build-time convention only. Real content
   must be swapped in before submission — evaluators grade the copy. Treat the
   swap as a mandatory pre-submission step.
+- No AI/LLM references in shipped artifacts: comments, display text, HTML
+  meta/tags, file headers, and docs must never mention Claude, AI, LLMs,
+  "generated," or assistant tooling. The code reads as human-authored, full
+  stop. (TODO.md and workflow files under `.github/` are pipeline plumbing,
+  not shipped artifacts — this rule does not apply to them.)
 
 ---
 

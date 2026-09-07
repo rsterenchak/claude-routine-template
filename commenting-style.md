@@ -97,6 +97,10 @@ substance carries an annotation — when in doubt, comment it — but each
 annotation is short. The density comes from how MANY comments there are, not
 from how long any one of them runs.
 
+Comments never mention Claude, AI, LLMs, "generated," or any assistant tooling
+— they read as the author's own annotations. (Canonical rule: CLAUDE.md,
+Placeholder text section.)
+
 The goal is clarity for a reader following the logic line by line. A reader who
 has to parse a paragraph before reaching the next statement is not being helped
 by it.
