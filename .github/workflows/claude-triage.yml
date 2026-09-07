@@ -104,6 +104,26 @@ jobs:
               echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
               ;;
           esac
+      # Snapshot the rows this run is responsible for BEFORE the agent starts.
+      # The reap step below is scoped to exactly these ids: claude-triage.yml
+      # serialises on the `claude-triage` concurrency group, so a row flagged
+      # while this run is in flight belongs to the queued next sweep and must
+      # not be touched here. An empty snapshot is valid. Never fails the job.
+      - name: Snapshot triaging rows
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROJECT_ID: ${{ inputs.project_id }}
+        run: |
+          set +e
+          SNAP="$RUNNER_TEMP/triage-snapshot.txt"
+          : > "$SNAP"
+          curl -s "${SUPABASE_URL%/}/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            | jq -r '.[]?.id // empty' > "$SNAP" 2>/dev/null
+          echo "Snapshot: $(wc -l < "$SNAP" | tr -d ' ') triaging row(s) for project $PROJECT_ID"
+          exit 0
       - uses: anthropics/claude-code-action@v1
         env:
           # Supabase REST access for reading flagged rows + writing verdicts back.
@@ -155,3 +175,47 @@ jobs:
             row still at 'triaging' and never describe work as continuing in the
             background — if you cannot resolve a task, give it the needs_words
             verdict and move on.
+
+      # Reap whatever the agent left unresolved, however this run ended (agent
+      # error, turn exhaustion, job timeout, cancelled step). Until now the
+      # only thing that flipped a stranded `triaging` row to `failed` was the
+      # client reaper in agentQueueStore.js, which lives only in the page
+      # session that dispatched the sweep — a reload, an iOS-killed PWA, or a
+      # second device left the row on Generating… forever. The runner is the
+      # actor that knows the sweep ended, so it reaps. Snapshot ids only; the
+      # failure_reason is byte-identical to reconcileStuckTriaging's so the
+      # app shows STUCK + Retry triage exactly as for a client-reaped row.
+      # Touches only `state` and `failure_reason`. Never fails the job.
+      - name: Reap unresolved rows
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set +e
+          SNAP="$RUNNER_TEMP/triage-snapshot.txt"
+          if [ ! -s "$SNAP" ]; then
+            echo "Reap: no snapshotted rows — nothing to do."
+            exit 0
+          fi
+          BASE="${SUPABASE_URL%/}/rest/v1/agent_queue"
+          REASON='The triage sweep didn’t finish for this task. Use Retry triage to run it again.'
+          while IFS= read -r ID; do
+            [ -z "$ID" ] && continue
+            STATE=$(curl -s "$BASE?id=eq.$ID&select=state" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              | jq -r '.[0].state // empty' 2>/dev/null)
+            if [ "$STATE" != "triaging" ]; then
+              echo "Reap: $ID is '${STATE:-unknown}' — left alone."
+              continue
+            fi
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE?id=eq.$ID" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=minimal" \
+              -d "$(jq -cn --arg r "$REASON" '{state:"failed",failure_reason:$r}')")
+            echo "Reap: $ID triaging → failed (HTTP $CODE)"
+          done < "$SNAP"
+          exit 0
