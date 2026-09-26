@@ -22,6 +22,11 @@ name: Tests
 # aren't dragged into the test build — so a fresh assignment with no tests yet
 # still passes CI on the Android compile alone.
 #
+# Live preview (optional): on a push to main, the `appetize` job uploads the
+# Android APK to Appetize so the latest build can be run in a browser from any
+# phone. It skips cleanly (job stays green) until the APPETIZE_API_TOKEN secret
+# is set, so repos that don't use it see no change. See the job for setup.
+#
 # Watch-out on first run: `dotnet workload install` occasionally hits a
 # permissions error on a fresh runner image. If it does, the fix is to run that
 # one step with elevated permissions (see the commented sudo fallback below).
@@ -101,3 +106,90 @@ jobs:
               dotnet test "$tp" -c Release --verbosity normal
             done
           fi
+
+  # Uploads the APK the test job built to Appetize, replacing the previous build
+  # under the same publicKey so the app's link never changes. Runs only on a push
+  # to main (merged work), never on PRs, so it spends one upload per merge.
+  #
+  # Setup, once per repo:
+  #   1. Secret   APPETIZE_API_TOKEN   — from appetize.io > Account > API tokens
+  #   2. Push to main. With no publicKey yet, this job CREATES the app and prints
+  #      its publicKey in the run summary.
+  #   3. Variable APPETIZE_PUBLIC_KEY  — save that publicKey as a repository
+  #      variable (Settings > Secrets and variables > Actions > Variables). Every
+  #      later push UPDATES that app instead of creating a new one.
+  # The app is created with run permission `authenticated`, so the link only
+  # works while signed in to the Appetize account.
+  appetize:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check for Appetize token
+        id: gate
+        env:
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+        run: |
+          if [ -z "$APPETIZE_API_TOKEN" ]; then
+            echo "APPETIZE_API_TOKEN not set — skipping live preview upload."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download APK
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+          path: apk
+
+      - name: Upload to Appetize
+        if: steps.gate.outputs.enabled == 'true'
+        env:
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
+          APPETIZE_PUBLIC_KEY: ${{ vars.APPETIZE_PUBLIC_KEY }}
+        run: |
+          # A Release build emits both an .aab and a universal *-Signed.apk;
+          # Appetize runs the signed APK only.
+          APK=$(find apk -name '*-Signed.apk' | head -1)
+          if [ -z "$APK" ]; then
+            echo "No *-Signed.apk in the android-apk artifact. Files found:"
+            find apk -type f
+            exit 1
+          fi
+          echo "Uploading $APK ($(du -h "$APK" | cut -f1))"
+
+          if [ -n "$APPETIZE_PUBLIC_KEY" ]; then
+            ENDPOINT="https://api.appetize.io/v1/apps/$APPETIZE_PUBLIC_KEY"
+          else
+            ENDPOINT="https://api.appetize.io/v1/apps"
+          fi
+
+          RESP=$(curl -sS --fail-with-body --max-time 600 -X POST "$ENDPOINT" \
+            -H "X-API-KEY: $APPETIZE_API_TOKEN" \
+            -F "file=@$APK" \
+            -F "platform=android" \
+            -F "appPermissions.run=authenticated" \
+            -F "note=${GITHUB_SHA::7}") || { echo "Appetize upload failed: $RESP"; exit 1; }
+
+          KEY=$(printf '%s' "$RESP" | jq -r '.publicKey // empty')
+          if [ -z "$KEY" ]; then
+            echo "Appetize response had no publicKey: $RESP"
+            exit 1
+          fi
+          LINK="https://appetize.io/app/$KEY"
+          {
+            echo "### Live preview"
+            echo "[$LINK]($LINK) — build ${GITHUB_SHA::7}"
+            if [ -z "$APPETIZE_PUBLIC_KEY" ]; then
+              echo ""
+              echo "New app created. Save \`$KEY\` as the repository variable"
+              echo "\`APPETIZE_PUBLIC_KEY\` so later pushes update this app instead"
+              echo "of creating another."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Live preview: $LINK"
