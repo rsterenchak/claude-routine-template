@@ -1745,8 +1745,8 @@ else
   echo
 fi
 # Step 3d: Appetize — maui only. The token turns on test.yml's live preview
-# upload; the publicKey variable can only be saved after the first upload
-# creates the app, so it is always a manual follow-up.
+# upload. The app's link is written to inject_targets.preview_url by that job,
+# so the manual publicKey variable is only a fallback when Supabase is absent.
 if [ "$SHAPE" = "maui" ]; then
   if [ "${GH_APPETIZE_DONE:-false}" = "true" ]; then
     echo "  3d. ${c_grn}[DONE via gh CLI ✓]${c_rst} APPETIZE_API_TOKEN secret already set."
@@ -1754,9 +1754,10 @@ if [ "$SHAPE" = "maui" ]; then
     echo "  3d. ${c_dim}Optional:${c_rst} add APPETIZE_API_TOKEN to enable the live preview upload:"
     echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
   fi
-  echo "       After the first push to main, copy the publicKey from that run's summary"
-  echo "       into the repository VARIABLE APPETIZE_PUBLIC_KEY so later pushes update"
-  echo "       the same app (Settings -> Secrets and variables -> Actions -> Variables)."
+  echo "       The first push to main creates the app and saves its link to this repo's"
+  echo "       inject_targets row (needs the Supabase secrets above). Without them, copy"
+  echo "       the publicKey from that run's summary into the repository VARIABLE"
+  echo "       APPETIZE_PUBLIC_KEY (Settings -> Secrets and variables -> Actions -> Variables)."
   echo
 fi
 # Step 4: inject registry — the repo must be a row in Supabase inject_targets for
