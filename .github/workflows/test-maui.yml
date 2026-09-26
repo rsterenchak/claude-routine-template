@@ -111,16 +111,16 @@ jobs:
   # under the same publicKey so the app's link never changes. Runs only on a push
   # to main (merged work), never on PRs, so it spends one upload per merge.
   #
-  # Setup, once per repo:
-  #   1. Secret   APPETIZE_API_TOKEN   — from appetize.io > Account > API tokens.
-  #      onboard.sh sets it automatically when the template repo holds it.
-  #   2. Push to main. With no publicKey yet, this job CREATES the app and prints
-  #      its publicKey in the run summary.
-  #   3. Variable APPETIZE_PUBLIC_KEY  — save that publicKey as a repository
-  #      variable (Settings > Secrets and variables > Actions > Variables). Every
-  #      later push UPDATES that app instead of creating a new one.
-  # The app is created with run permission `authenticated`, so the link only
-  # works while signed in to the Appetize account.
+  # The link lives on this repo's inject_targets row (preview_url), which the
+  # Void Structure tab reads to show its Live preview chip. The row is also where
+  # this job finds the app to update, so there is no per-repo key to copy by hand:
+  #   first push  — no preview_url yet: CREATE the app, write its link to the row
+  #   later push  — preview_url present: UPDATE that app in place
+  # Needs APPETIZE_API_TOKEN (onboard.sh carries it from the template) plus the
+  # SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY secrets triage already uses. Without
+  # the Supabase pair it falls back to the APPETIZE_PUBLIC_KEY repository
+  # variable. The app is created with run permission `authenticated`, so the
+  # link only works while signed in to the Appetize account.
   appetize:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -153,6 +153,8 @@ jobs:
         env:
           APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
           APPETIZE_PUBLIC_KEY: ${{ vars.APPETIZE_PUBLIC_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           # A Release build emits both an .aab and a universal *-Signed.apk;
           # Appetize runs the signed APK only.
@@ -164,8 +166,24 @@ jobs:
           fi
           echo "Uploading $APK ($(du -h "$APK" | cut -f1))"
 
-          if [ -n "$APPETIZE_PUBLIC_KEY" ]; then
-            ENDPOINT="https://api.appetize.io/v1/apps/$APPETIZE_PUBLIC_KEY"
+          # The registry row is matched case-insensitively, the same way the
+          # PWA normalizes repo names. Both headers are required: the legacy
+          # service_role JWT only elevates past RLS on the Bearer header.
+          HAVE_DB=false
+          [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && HAVE_DB=true
+          ROW_FILTER="repo=ilike.${GITHUB_REPOSITORY}"
+
+          KEY="$APPETIZE_PUBLIC_KEY"
+          if [ -z "$KEY" ] && [ "$HAVE_DB" = "true" ]; then
+            ROW=$(curl -sS --fail-with-body "$SUPABASE_URL/rest/v1/inject_targets?${ROW_FILTER}&select=preview_url" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY") || { echo "Registry read failed: $ROW"; exit 1; }
+            STORED=$(printf '%s' "$ROW" | jq -r '.[0].preview_url // empty')
+            KEY="${STORED##*/}"
+          fi
+
+          if [ -n "$KEY" ]; then
+            ENDPOINT="https://api.appetize.io/v1/apps/$KEY"
           else
             ENDPOINT="https://api.appetize.io/v1/apps"
           fi
@@ -177,20 +195,41 @@ jobs:
             -F "appPermissions.run=authenticated" \
             -F "note=${GITHUB_SHA::7}") || { echo "Appetize upload failed: $RESP"; exit 1; }
 
-          KEY=$(printf '%s' "$RESP" | jq -r '.publicKey // empty')
-          if [ -z "$KEY" ]; then
+          NEW_KEY=$(printf '%s' "$RESP" | jq -r '.publicKey // empty')
+          if [ -z "$NEW_KEY" ]; then
             echo "Appetize response had no publicKey: $RESP"
             exit 1
           fi
-          LINK="https://appetize.io/app/$KEY"
+          LINK="https://appetize.io/app/$NEW_KEY"
+
+          # Record the link on the registry row so the Structure tab shows it and
+          # the next push finds the app. A missing row warns but doesn't fail —
+          # the upload itself succeeded.
+          SAVED=false
+          if [ "$HAVE_DB" = "true" ]; then
+            PATCHED=$(curl -sS --fail-with-body -X PATCH "$SUPABASE_URL/rest/v1/inject_targets?${ROW_FILTER}" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=representation" \
+              -d "$(jq -n --arg u "$LINK" '{preview_url: $u}')") || { echo "::warning::Registry write failed: $PATCHED"; PATCHED='[]'; }
+            if [ "$(printf '%s' "$PATCHED" | jq 'length')" -gt 0 ]; then
+              SAVED=true
+            else
+              echo "::warning::No inject_targets row matched ${GITHUB_REPOSITORY}; preview_url not saved."
+            fi
+          fi
+
           {
             echo "### Live preview"
             echo "[$LINK]($LINK) — build ${GITHUB_SHA::7}"
-            if [ -z "$APPETIZE_PUBLIC_KEY" ]; then
+            if [ "$SAVED" = "true" ]; then
               echo ""
-              echo "New app created. Save \`$KEY\` as the repository variable"
-              echo "\`APPETIZE_PUBLIC_KEY\` so later pushes update this app instead"
-              echo "of creating another."
+              echo "Saved to this repo's registry row; the Structure tab shows it on next load."
+            elif [ -z "$KEY" ]; then
+              echo ""
+              echo "New app created but not saved to the registry. Save \`$NEW_KEY\` as the"
+              echo "repository variable \`APPETIZE_PUBLIC_KEY\` so later pushes update this app."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           echo "Live preview: $LINK"
