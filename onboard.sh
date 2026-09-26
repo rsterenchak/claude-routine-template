@@ -1282,6 +1282,7 @@ GH_PAGES_DEFERRED=false   # build-pipeline: Pages enabling fails until gh-pages 
 GH_SECRET_DONE=false
 GH_SUPABASE_DONE=false
 GH_INJECTOR_DONE=false
+GH_APPETIZE_DONE=false
 if [ "$USE_GH" = "true" ]; then
   REPO_FOR_GH="$(cd "$TARGET" && git remote get-url origin 2>/dev/null | sed -E 's#.*[:/]([^/]+/[^/]+?)(\.git)?$#\1#' || echo "")"
   if [ -z "$REPO_FOR_GH" ] || [ "$REPO_FOR_GH" = "<owner>/<repo>" ]; then
@@ -1425,6 +1426,37 @@ if [ "$USE_GH" = "true" ]; then
         echo "  ${c_dim}-> refactor scan will skip on this repo (see step below)${c_rst}"
         ;;
     esac
+    # 6. Appetize token — maui only. test.yml's `appetize` job uploads each
+    # merged Android build to Appetize for a live in-browser preview. One token
+    # covers every repo on the account, so it's the same paste each time (or
+    # carried from the template's secret on a CI run). Optional: the job skips
+    # cleanly without it. Not offered to other shapes — nothing else reads it,
+    # and a token a repo doesn't use is one more place it can leak from.
+    if [ "$SHAPE" = "maui" ]; then
+      echo
+      ni_read appetize_confirm "  Add APPETIZE_API_TOKEN secret now? [y/N] " "$([ -n "${APPETIZE_API_TOKEN:-}" ] && echo y || echo n)"
+      case "$appetize_confirm" in
+        [yY]|[yY][eE][sS])
+          echo -n "    APPETIZE_API_TOKEN (input hidden, press Enter when done): "
+          ni_read_secret appetize_token "" "${APPETIZE_API_TOKEN:-}"
+          echo
+          if [ -n "$appetize_token" ]; then
+            if printf '%s' "$appetize_token" | gh secret set APPETIZE_API_TOKEN --repo "$REPO_FOR_GH" >/dev/null 2>&1; then
+              echo "  ${c_grn}set${c_rst}    APPETIZE_API_TOKEN secret"
+              GH_APPETIZE_DONE=true
+            else
+              echo "  ${c_red}FAILED${c_rst} couldn't set APPETIZE_API_TOKEN (add manually in Settings -> Secrets and variables -> Actions)"
+            fi
+            unset appetize_token
+          else
+            echo "  ${c_yel}skip${c_rst}   empty token, skipped"
+          fi
+          ;;
+        *)
+          echo "  ${c_dim}-> live preview upload will skip on this repo (see step below)${c_rst}"
+          ;;
+      esac
+    fi
     echo
   fi
 fi
@@ -1710,6 +1742,21 @@ else
     echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
     echo "       Only useful for a JS source tree; the run step skips cleanly without them."
   fi
+  echo
+fi
+# Step 3d: Appetize — maui only. The token turns on test.yml's live preview
+# upload; the publicKey variable can only be saved after the first upload
+# creates the app, so it is always a manual follow-up.
+if [ "$SHAPE" = "maui" ]; then
+  if [ "${GH_APPETIZE_DONE:-false}" = "true" ]; then
+    echo "  3d. ${c_grn}[DONE via gh CLI ✓]${c_rst} APPETIZE_API_TOKEN secret already set."
+  else
+    echo "  3d. ${c_dim}Optional:${c_rst} add APPETIZE_API_TOKEN to enable the live preview upload:"
+    echo "       Settings -> Secrets and variables -> Actions -> New repository secret"
+  fi
+  echo "       After the first push to main, copy the publicKey from that run's summary"
+  echo "       into the repository VARIABLE APPETIZE_PUBLIC_KEY so later pushes update"
+  echo "       the same app (Settings -> Secrets and variables -> Actions -> Variables)."
   echo
 fi
 # Step 4: inject registry — the repo must be a row in Supabase inject_targets for
