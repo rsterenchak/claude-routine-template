@@ -10,25 +10,32 @@ assignment's language while keeping the density and structure identical.**
 
 Every source file opens with a block-comment header containing, in order:
 
-- A prose paragraph describing what the program does and how the user interacts
-  with it — a few sentences, not a one-liner.
+- A short prose paragraph describing what the file does and how the user
+  interacts with it — at most three sentences and 60 words.
 - A blank line.
 - Two lines: the author (`Robert Sterenchak`) and the date.
 
 Use whatever header comment form is idiomatic for the language — a `/* */` block
 in C/C++/C#/Java, a module docstring in Python — but keep all three pieces. Do
-not add a course name, assignment number, or any field not listed above.
+not add a course name, assignment number, requirement or rubric labels (A1, B,
+F1, …), or any field not listed above.
 
-Keep the paragraph to roughly three to five sentences. "A few sentences, not a
-one-liner" sets a floor, not a licence: a header that runs to two hundred words
-has stopped orienting the reader and started arguing with them. Say what the
-file does, what it reads or depends on, and how it is run. Leave the reasoning
-behind individual choices to the lines those choices live on.
+The limit is in words as well as sentences: three long sentences can still run
+to a paragraph, so 60 words is the cap that matters. Say what the file does,
+what it reads or depends on, and how it is run or used. One short clause of
+purpose is fine ("so they can be chased before a fee is charged"); anything
+more is reasoning, and reasoning does not belong in the header.
 
-The header describes WHAT the file does and WHY it exists. Decisions about
-specific lines — why a comparison is inclusive, why one filter is explicit
-rather than incidental — belong in the inline comment on that line, where the
-reader meets them. Do not explain a line in the header and again beside it.
+Keep these out of the header entirely:
+
+- Implementation choices — why markup is inlined rather than fetched, why one
+  approach beat another. Put that on the line where the choice is made.
+- Wiring — which handler calls which service, how events flow between pieces.
+  The function comments and inline comments already trace this.
+- Requirement mapping — which part of the spec a piece satisfies. The header
+  orients a reader of the code, not a grader.
+
+Do not explain a line in the header and again beside it.
 
 ## Comment every function / method
 
@@ -143,11 +150,10 @@ follows it directly — no second block restating the same thing.
 
 ```sql
 /*
- * This file holds the weekly overdue report for the interlibrary loan tracker:
- * the query the loan desk runs to see which borrowed items are late, so it can
- * chase them before a patron is charged a fee. It reads the requests table
- * (schema.sql), joining patrons for the borrower's name and branches for the
- * lending branch; run seed.sql first to see it against real rows.
+ * This file holds the loan desk's weekly overdue report, listing borrowed
+ * items past their due date so they can be chased before a fee is charged.
+ * It reads requests, patrons, and branches from schema.sql. Run seed.sql
+ * first to see it against real rows.
  *
  * Robert Sterenchak
  * August 1, 2026
