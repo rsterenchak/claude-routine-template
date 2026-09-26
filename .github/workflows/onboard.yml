@@ -139,6 +139,9 @@ jobs:
           # setting them = the target's scan step skips cleanly. Nothing breaks.
           TODO_INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
           TODO_INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          # Propagated to maui targets only (onboard.sh gates on shape) for the
+          # test.yml live preview upload. Absent here = skipped, nothing breaks.
+          APPETIZE_API_TOKEN: ${{ secrets.APPETIZE_API_TOKEN }}
         run: |
           chmod +x onboard.sh
           ./onboard.sh target-repo

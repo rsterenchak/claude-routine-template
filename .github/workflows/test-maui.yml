@@ -112,7 +112,8 @@ jobs:
   # to main (merged work), never on PRs, so it spends one upload per merge.
   #
   # Setup, once per repo:
-  #   1. Secret   APPETIZE_API_TOKEN   — from appetize.io > Account > API tokens
+  #   1. Secret   APPETIZE_API_TOKEN   — from appetize.io > Account > API tokens.
+  #      onboard.sh sets it automatically when the template repo holds it.
   #   2. Push to main. With no publicKey yet, this job CREATES the app and prints
   #      its publicKey in the run summary.
   #   3. Variable APPETIZE_PUBLIC_KEY  — save that publicKey as a repository
