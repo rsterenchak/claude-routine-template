@@ -1162,7 +1162,17 @@ ni_read IN_NAME "  Project name [${NAME_DEFAULT}]: " "${ONBOARD_NAME:-}"
 PROJECT_NAME="${IN_NAME:-$NAME_DEFAULT}"
 ni_read IN_DESC "  One-line description: " "${ONBOARD_DESC:-}"
 PROJECT_DESCRIPTION="${IN_DESC:-(fill in a one-line description)}"
-STACK_DEFAULT="$([ "$IS_ESM" = "true" ] && echo "ESM (type: module)" || echo "CommonJS")"
+# The module-type default only means something for Node repos; every other
+# shape used to fall through to "CommonJS", which a .NET or SQL run then read
+# as the repo's stack.
+case "$SHAPE" in
+  maui)      STACK_DEFAULT="C# / .NET MAUI (Android head)" ;;
+  desktop)   STACK_DEFAULT="C# / .NET desktop (WinForms/WPF)" ;;
+  console)   STACK_DEFAULT="C# / .NET console" ;;
+  sql)       STACK_DEFAULT="SQL" ;;
+  repo-only) STACK_DEFAULT="none (no build)" ;;
+  *)         STACK_DEFAULT="$([ "$IS_ESM" = "true" ] && echo "ESM (type: module)" || echo "CommonJS")" ;;
+esac
 ni_read IN_STACK "  Stack [${STACK_DEFAULT}]: " "${ONBOARD_STACK:-}"
 STACK="${IN_STACK:-$STACK_DEFAULT}"
 # Derived defaults for the remaining slots, falling back to readable hints when
