@@ -55,7 +55,7 @@ same explanation twice at length.
 In that case write the HEADER ONLY and go straight to the code. Do not add a
 block comment above the single unit restating it. Every other rule still
 applies: inline comments on declarations and meaningful statements, block
-comments above loops and control blocks INSIDE the unit, and end-of-block
+comments above loops and control blocks INSIDE the unit, and end-of-declaration
 annotations.
 
 A file with two or more top-level units is the normal case and keeps both
@@ -90,12 +90,16 @@ query or a chained expression can be an entire unit of work, and the comment
 above it will expand to match unless you hold it to the same one-or-two-sentence
 shape.
 
-## Mark the end of every block
+## Mark the end of declarations
 
-Annotate closing braces with what they close — `}//end of main`,
-`}//end of function`, `}//end while loop`, `}//ends copy constructor`. This
-applies to functions, loops, and other notable blocks. In brace-less languages
-(Python) this one drops away naturally; every other rule still applies.
+Annotate the closing brace of every class, method, and constructor with what it
+closes — `}//end of main`, `}//end of updateProduct method`,
+`}//end of Inventory class`, `}//ends copy constructor`. Do NOT annotate the
+closing braces of `if`/`else`, loops, `switch`, `try`/`catch`, or any other
+block inside a method: the indentation already shows where they end, and a
+label on each one turns every method into a column of `}//end of if`. In
+brace-less languages (Python) this rule drops away naturally; every other rule
+still applies.
 
 ## Overall
 
