@@ -238,9 +238,12 @@ runnable `Main`.
 
 ## desktop
 
-WinForms or WPF. Software II.
+WinForms or WPF. Software I and II.
 
-**Template:** `rsterenchak/template-desktop`
+**Template:** `rsterenchak/template-desktop` — app (`net10.0-windows`), a plain
+`net10.0` Core library, and an xUnit project that references Core only. Rename
+`DesktopApp` to the project's name before onboarding; the template README has
+the commands.
 
 **Onboarding adds:** `test.yml` running on **windows-latest**, `manifest.yml`.
 No `run-capture.yml` — `dotnet run` on a GUI app opens a window and hangs a
@@ -251,8 +254,32 @@ headless runner.
   TFM) is the routing signal. Without it the repo resolves to `console` and
   `dotnet build` fails on ubuntu — the Windows Desktop targeting packs ship with
   the SDK only on Windows.
-- Keep testable logic out of the `Form`. CI can't instantiate one.
-- windows-latest is slower and costs more Actions minutes than console.
+- **Tests must target plain `net10.0`.** The routine runs on ubuntu and runs
+  `dotnet test` as its baseline check. A `net*-windows` test project builds
+  there (with `EnableWindowsTargeting`) but cannot RUN — its test host needs the
+  `Microsoft.WindowsDesktop.App` runtime — so every run stops at "baseline test
+  failure". Testable logic lives in the Core library, which must never
+  reference `System.Windows.Forms`; the tests reference Core only. Verify from a
+  Codespace before onboarding: `dotnet test` passing there means the routine's
+  baseline will pass, since both are Linux.
+- Keep testable logic out of the `Form`. CI can't instantiate one, so form
+  entries get no automated coverage — click-test them, and open new forms in
+  the Visual Studio designer (Shift+F7) once to confirm they load.
+- Coursework graded in Visual Studio: record designer-compatible forms
+  (`Form.cs` + `Form.Designer.cs`, only designer-serializable code in
+  `InitializeComponent`) as a convention in the repo's `CLAUDE.md` before the
+  first form entry, or runs copy the template's code-built placeholder.
+- Visual Studio creates `<Form>.resx` the first time a form opens in the
+  designer. Commit them — they are a normal part of a WinForms project. Its
+  `.vs/` cache is ignored by the template's `.gitignore`.
+- **Submission zip:** package only the Visual Studio parts, leaving every
+  pipeline file out —
+  `git archive -o <Name>_submission.zip HEAD <Name>.sln global.json src tests`.
+  Nothing pipeline-related may live in those paths: no comments in `.csproj`
+  files, none in source. Extract the zip to a fresh folder and F5 it in Visual
+  Studio before submitting.
+- windows-latest is slower and costs more Actions minutes than console; Windows
+  minutes count double against a private repo's quota.
 
 ---
 

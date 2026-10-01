@@ -112,6 +112,63 @@ Applies to every language in this repo.
   is (`setPerson(Person newPerson)`), not `p` or `value`.
 </java>
 
+<csharp>
+Translated from the Java conventions above; where the two differ, this section
+governs C# files.
+
+- One class per file, filename matching the class name exactly. File-scoped
+  namespaces (`namespace ProjectName.Core;`).
+- The file header is the one in `commenting-style.md`: a short paragraph, then
+  `Robert Sterenchak` and the date. Do NOT use the Java section's
+  `@author` / `@assignment` / `@date` tag block, and add no course, assignment,
+  or requirement fields.
+- When the assignment supplies a class diagram, every class and member it shows
+  keeps the diagram's name, casing, and types exactly, even where that breaks
+  C# convention. Otherwise methods are camelCase and properties PascalCase, and
+  anything you add follows the same casing so the class reads as one piece.
+- Members are grouped under section comments in this order, omitting any that
+  do not apply:
+
+      //instance variables
+      /** Constructors */
+      /** Properties */
+      /** Methods */
+      /** Event Handlers */
+
+- Fields are private and initialised explicitly at declaration, even where the
+  default would be the same (`private int nextID = 0;`).
+- Member access inside the class is always qualified with `this.`
+  (`this.Items.Add(item)`, `this.itemsGrid.DataSource = ...`).
+- Constructors assign through properties rather than backing fields, so a check
+  added to a setter later applies to construction too. Overloaded constructors
+  are declared shortest-first.
+- A diagrammed `<<prop>>` is a C# property. Use an auto-property unless the
+  setter needs logic.
+- Event handlers use the Visual Studio designer's default name,
+  `<controlName>_<EventName>` (`saveButton_Click`,
+  `itemsGrid_SelectionChanged`, `MainForm_Load`), so a handler created by
+  double-clicking a control in the designer matches the ones already in the
+  file. This overrides the `handle` prefix in the naming section above for C#
+  files, and is the one exception to camelCase method names. Because handlers
+  are named after their control, controls must be renamed to their final names
+  before a handler is attached — never leave `button1_Click`.
+- Controls are named in full, with their role as a suffix: `saveButton`,
+  `itemsGrid`, `searchTextBox`, `activeCheckBox`, `nameLabel`. Never `button1`,
+  never a `btn` / `txt` prefix.
+- Lookup and search logic uses an explicit loop — `foreach`, or `while` with a
+  `counter` when the index matters — not a LINQ chain. The loop is the work, so
+  it stays visible.
+
+`.Designer.cs` files follow the Visual Studio designer's own layout. The file
+header from `commenting-style.md` still goes at the top, but the rest of the
+commenting style does NOT apply inside `InitializeComponent` or the designer's
+control-field declarations: the designer rewrites both on every save and drops
+comments there. The designer's standard `#region Windows Form Designer
+generated code` and its `components` / `Dispose` boilerplate stay exactly as
+Visual Studio writes them. That wording is the IDE's own, not a reference to
+assistant tooling.
+</csharp>
+
 <structure>
 - A function does one thing named by its name. When a function grows past the
   point where its name still describes it, that is the signal to split — not a
