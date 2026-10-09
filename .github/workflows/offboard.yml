@@ -1,0 +1,151 @@
+name: Offboard a repo
+# correlation_id is echoed here so the Worker can find this run by name
+# (workflow_dispatch does not return a run id to the caller) — same convention
+# as onboard.yml.
+run-name: Offboard ${{ inputs.target_repo }}${{ inputs.purge == 'true' && ' · purge' || '' }}${{ inputs.correlation_id && format(' · {0}', inputs.correlation_id) || '' }}
+
+# The inverse of onboard.yml: runs offboard.sh head-lessly against a target
+# repo. Bringing a repo up to date is onboard.yml's job (its `refresh` input);
+# this takes a repo OUT.
+#
+#   default      delete chrome (routine files, managed workflows, manifest
+#                generators, generated src-manifest.json) + the six repo
+#                secrets + the inject_targets row. Authored files (CLAUDE.md,
+#                routine.md, style docs, assignment.md / project.md, TODO.md)
+#                stay. Pages keeps serving.
+#   purge=true   also delete the authored files. Clean slate.
+#
+# Files are deleted only when provably template-sourced (offboard.sh walks the
+# template's history — hence fetch-depth 0 below); the rest are HELD and
+# listed in the log. `force` deletes held files too. `preflight` reports what
+# WOULD happen and touches nothing.
+#
+# Same control-repo secrets as onboard.yml (ONBOARD_PAT, CLAUDE_CODE_OAUTH_TOKEN,
+# SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ONBOARD_USER_ID, TODO_INJECTOR_URL,
+# TODO_INJECTOR_SECRET, APPETIZE_API_TOKEN). ONBOARD_PAT needs Secrets RW on the
+# targets for the secret deletes — it already has it for onboarding.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Repo to offboard (owner/name)"
+        required: true
+        type: string
+      purge:
+        description: "Also delete the authored files (CLAUDE.md, routine.md, style docs, assignment.md / project.md, TODO.md)"
+        required: false
+        type: string
+        default: "false"
+      preflight:
+        description: "Report only — list what would be deleted / held, change nothing"
+        required: false
+        type: string
+        default: "false"
+      force:
+        description: "Also delete files that could not be proven template-sourced (held files)"
+        required: false
+        type: string
+        default: "false"
+      correlation_id:
+        description: "Opaque id echoed into run-name and the report POST"
+        required: false
+        type: string
+        default: ""
+
+# Same group as onboard.yml, so an offboard and an onboard of the same repo can
+# never race each other on the push.
+concurrency:
+  group: onboard-${{ inputs.target_repo }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  offboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the routine template (for offboard.sh)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Full history: offboard.sh proves a file safe to delete by matching
+          # it against SOME template revision. A shallow checkout holds only
+          # the tip, so every stale-but-unedited file would be held.
+          fetch-depth: 0
+
+      - name: Mask the PAT in logs
+        run: echo "::add-mask::${{ secrets.ONBOARD_PAT }}"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "claude-onboard[bot]"
+          git config --global user.email "claude-onboard@users.noreply.github.com"
+
+      - name: Clone the target repo
+        env:
+          PAT: ${{ secrets.ONBOARD_PAT }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          # No ".git" suffix — both scripts derive the repo slug from the origin
+          # URL (see onboard.yml for the slug-corruption history).
+          git clone "https://x-access-token:${PAT}@github.com/${TARGET_REPO}" target-repo
+
+      - name: Offboard (non-interactive)
+        env:
+          OFFBOARD_NONINTERACTIVE: "1"
+          OFFBOARD_PURGE: ${{ inputs.purge == 'true' && '1' || '' }}
+          OFFBOARD_DRY_RUN: ${{ inputs.preflight == 'true' && '1' || '' }}
+          OFFBOARD_FORCE: ${{ inputs.force == 'true' && '1' || '' }}
+          OFFBOARD_REPORT_OUT: /tmp/offboard.json
+          # gh (for `gh secret delete`) reads GH_TOKEN.
+          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
+          # Registry row delete. Absent = skipped, reported.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          ONBOARD_USER_ID: ${{ secrets.ONBOARD_USER_ID }}
+        run: |
+          chmod +x offboard.sh
+          ./offboard.sh target-repo
+
+      - name: Report preflight to the Worker
+        if: ${{ inputs.preflight == 'true' }}
+        env:
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          set -uo pipefail
+          if [ -z "${INJECTOR_URL:-}" ] || [ -z "${INJECTOR_SECRET:-}" ]; then
+            echo "Worker URL/secret absent — printing the report only."
+            cat /tmp/offboard.json
+            exit 0
+          fi
+          # Body-flag routing like preflight_result. The Worker has no
+          # offboard_result handler yet; until it does this is rejected and
+          # that is fine — the report is in the log either way, and a
+          # reporting failure must never fail a read-only run.
+          curl -sS -X POST "${INJECTOR_URL}" \
+            -H "content-type: application/json" \
+            -H "authorization: Bearer ${INJECTOR_SECRET}" \
+            --data "$(jq -c --arg cid "$CORRELATION_ID" \
+                 '{offboard_result: true, correlation_id: $cid} + .' /tmp/offboard.json)" \
+            || echo "report POST failed (non-fatal)"
+          cat /tmp/offboard.json
+
+      - name: Verify origin
+        if: ${{ inputs.preflight != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          # claude-run.yml is universal chrome: after an offboard it must be
+          # gone from the default branch.
+          if gh api "repos/${TARGET_REPO}/contents/.github/workflows/claude-run.yml" --jq .name >/dev/null 2>&1; then
+            echo "claude-run.yml still on ${TARGET_REPO}; it was held (see the offboard log) or the push failed. Re-run with force=true if it is scaffold." >&2
+            exit 1
+          fi
+          echo "claude-run.yml gone from ${TARGET_REPO} — offboard reached origin."

@@ -1,7 +1,7 @@
 name: Onboard a repo
 # correlation_id is echoed here so the Worker can find this run by name
 # (workflow_dispatch does not return a run id to the caller).
-run-name: Onboard ${{ inputs.target_repo }}${{ inputs.correlation_id && format(' · {0}', inputs.correlation_id) || '' }}
+run-name: Onboard ${{ inputs.target_repo }}${{ inputs.refresh != 'none' && format(' · refresh={0}', inputs.refresh) || '' }}${{ inputs.correlation_id && format(' · {0}', inputs.correlation_id) || '' }}
 
 # Route B orchestrator: runs onboard.sh (the single onboarding brain) head-lessly
 # against a target repo. Dispatched by the Worker's onboard route (piece 3) or
@@ -56,8 +56,14 @@ on:
         required: false
         type: string
         default: "false"
+      refresh:
+        description: "none = create missing only · stale = also overwrite managed files that are stale AND provably unedited · all = overwrite every stale managed file, local edits included (authored files are never touched)"
+        required: false
+        type: choice
+        default: none
+        options: [none, stale, all]
       backfill_stale:
-        description: "Also overwrite .claude/ routine files that are stale AND provably unedited locally (files with local edits are reported, never touched)"
+        description: "Legacy alias for refresh=stale (the Worker route and the app's checkbox send this); ignored when refresh is not 'none'"
         required: false
         type: string
         default: "false"
@@ -120,8 +126,12 @@ jobs:
           # any gh call, so nothing on the target repo is touched.
           ONBOARD_PREFLIGHT: ${{ inputs.preflight == 'true' && '1' || '' }}
           ONBOARD_PREFLIGHT_OUT: /tmp/preflight.json
-          # Opt-in refresh of stale-but-unedited routine files (see the input).
-          ONBOARD_BACKFILL_STALE: ${{ inputs.backfill_stale == 'true' && '1' || '' }}
+          # refresh=stale (or the legacy backfill_stale=true) overwrites stale
+          # managed files that are provably unedited; refresh=all overwrites
+          # the held ones too (FORCE implies STALE inside onboard.sh). Authored
+          # files are never candidates at either level.
+          ONBOARD_BACKFILL_STALE: ${{ (inputs.refresh == 'stale' || inputs.refresh == 'all' || inputs.backfill_stale == 'true') && '1' || '' }}
+          ONBOARD_BACKFILL_FORCE: ${{ inputs.refresh == 'all' && '1' || '' }}
           # gh (used by onboard.sh for `gh api` + `gh secret set`) reads GH_TOKEN.
           GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
           # auto => empty, so onboard.sh runs its own shape detection. Written as
