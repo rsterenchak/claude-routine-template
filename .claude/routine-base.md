@@ -36,6 +36,7 @@ Parsing rules:
 - Only `- [ ]` (unchecked) lines are candidates; `- [x]` are ignored.
 - A task's **type** comes from its `Type:` sub-bullet. The value MUST be either `bug` or `feature` (case-insensitive, leading/trailing whitespace tolerated). If the line is missing, malformed, or contains anything else, the task is INELIGIBLE for this run — skip it and continue down the list. Do not guess type from the title, description, or any other heuristic.
 - A task's **priority** comes from a `**[HIGH]**`, `**[MEDIUM]**`, or `**[LOW]**` marker on the task line. If absent, default to MEDIUM.
+- A task MAY carry an optional `Verify:` sub-bullet listing viewports and routes to render after the change (`Verify: 1300x900, 1300x700 → /, /play`). It is NOT part of eligibility; its meaning is defined in <visual_verification>.
 - A task MAY carry an optional `Style:` sub-bullet. It is NOT part of eligibility — a task with no `Style:` line, or an unrecognised value, is fully eligible and simply carries no style mode. Its meaning is defined by `.claude/style.md` in repos that have one; where no style doc exists the line has no effect. NEVER infer a style mode from the title or description, and never treat a malformed `Style:` line as a reason to skip a task — report it in the PR body and proceed without it.
 - A task's **title** is the task line with `- [ ]` and the priority marker stripped.
 - Indented bullets beneath a task (Type, Description, File, etc.) belong to that task and must be read as implementation context — do not treat them as separate tasks.
@@ -69,6 +70,7 @@ Exit states:
 4. Keep the change scoped strictly to the task. Do NOT refactor, reformat, or fix unrelated issues, even if you spot them. Do NOT append them to TODO.md either: an appended entry is indistinguishable from one a human wrote, so the next `backlog` run selects and executes it without anyone having agreed to it — the routine would be enqueueing its own work. Instead, report the observation in the PR body under **Notes** AND in your closing summary, so it reaches the human who decides whether it becomes a task. Describe each in a sentence: what you saw, where, and why it is out of scope for this task. The scoped change includes any project bookkeeping update described in <post_task_bookkeeping>.
 5. Add or update tests when the task is a bug fix or a feature with testable behavior. For bug fixes (Type: bug), write the regression test first, confirm it fails against the current code, then implement the fix and confirm it passes. For features (Type: feature), add tests that cover the new behavior's invariants.
 6. Run the test verification loop described in <test_verification> before any commit. All tests must pass locally before you push.
+7. Then run <visual_verification> when it is triggered (a `Verify:` line, or a change to presentational files). A rendered page you have not looked at is not verified.
 </implementation>
 
 <post_task_bookkeeping>
@@ -113,6 +115,28 @@ After every meaningful change during implementation:
 5. If after three full iterations of implement → test → fix the suite still doesn't pass, abort cleanly. Do NOT commit, do NOT create a branch, do NOT push, do NOT open a PR. Reset the working tree to the clean <BASE_BRANCH> state (`git reset --hard origin/<BASE_BRANCH>` and `git clean -fd`) so main and the local workspace are untouched. Report the failing test names and your best diagnosis of why. The task in TODO.md remains unchecked so the next run (or a human) can pick it up. A clean main is more valuable than a partial landing.
 </test_verification>
 
+<visual_verification>
+Tests prove behavior; they do not prove that the page LOOKS right. This step renders the change and makes you look at it before any commit. It runs after <test_verification> passes, and only when triggered.
+
+Triggered when EITHER applies:
+  (a) the task carries a `Verify:` sub-bullet, or
+  (b) the diff touches a presentational file: any `.css` / `.scss` / `.html` / `.jsx` / `.tsx` / `.vue` / `.svelte`, or a `.js` / `.ts` file whose change is DOM structure, markup, or styling.
+Not triggered, or `.claude/routine.md`'s preview command is `none` → skip, and say which under **Visual** in the PR body.
+
+The `Verify:` line: a comma-separated list of `WIDTHxHEIGHT` viewports, then `→`, then one or more routes relative to the preview URL (comma-separated). Examples:
+  - Verify: 1300x900, 1300x700, 1300x560 → /
+  - Verify: 390x844 → /, /play
+Trigger (b) with no `Verify:` line → render 1300x900, 1300x700 and 390x844 on `/`.
+
+Procedure:
+1. Build if the project has a build command. Find the preview command in `.claude/routine.md` ("Preview (visual verification)"). A `routine.md` written before that section existed has none — then derive it: a `vite.config.*` beside `package.json` → `npx vite preview --port 4173 --strictPort` with the config's `base:` appended to `http://localhost:4173`; otherwise a build dir → `python3 -m http.server 4173 --directory <build dir>`; a served-from-source repo → the same server on the working dir; nothing renderable → treat as `none` and skip. Start the preview command in the background (`nohup <command> > .verify/server.log 2>&1 &` — this server is the one process the routine may background, because the screenshots need it alive; you kill it in step 6) and wait until the preview URL answers (`curl -sf <url>` in a retry loop, up to 30s). A preview that never answers is a failure — read `.verify/server.log`, fix or abort; never screenshot a 404.
+2. For each viewport × route: `npx --yes playwright screenshot --viewport-size=WIDTH,HEIGHT --wait-for-timeout=1500 "<preview URL><route>" ".verify/<WIDTH>x<HEIGHT>-<route-slug>.png"` (route `/` → slug `root`). Chromium is installed by `claude-run.yml` before the run; if the command reports a missing browser executable, run `npx --yes playwright install chromium` once and retry.
+3. READ every PNG — the Read tool renders images. Judge each against the task's Description, in order: (i) is the thing the task asked for visible and correct at this size; (ii) is anything clipped, overlapping, off-screen or unreachable that the task did not intend; (iii) does the rest of the page still read as the Description implies. For `Type: bug`, the broken state the Description names must be gone. Write the verdict for each shot down — it goes in the PR body.
+4. A shot that fails the judgment is a failing test: fix, re-render that shot, re-judge. Three iterations without a fully passing set → abort exactly as <test_verification> step 5 prescribes (reset, no branch, no PR) and report which viewport/route failed and what you saw.
+5. `.verify/` is never committed. `claude-run.yml` excludes it through git's global ignore and uploads it as the run's `verify-screenshots` artifact after your turn, so leave the folder in place — do not delete it, do not add it to the repo's `.gitignore`.
+6. Stop the preview server (`kill` the PID you started). Nothing from this step may still be running when your turn ends (<hard_constraints>).
+</visual_verification>
+
 <git_workflow>
 1. Branch from the latest <BASE_BRANCH>:
      `claude/<type>-<kebab-case-title>`
@@ -143,6 +167,7 @@ After every meaningful change during implementation:
      • **Changes** — bulleted summary of what changed and why.
      • **Files modified** — list.
      • **Testing** — name the command run (the project test command from the working directory), its result (e.g. "24/24 passed"), and which tests specifically exercise the new or changed behavior. If you added new tests, list them. If the task touches code with no test coverage, say so explicitly: "No existing tests cover this code path; manual review recommended."
+     • **Visual** — one of: "Not triggered" (no `Verify:` line and no presentational change); "Skipped: no preview command"; or the viewports × routes rendered with a one-line verdict each, ending with "Screenshots: `verify-screenshots` artifact on this run". Required whenever <visual_verification> ran.
      • **Bookkeeping** — what the project bookkeeping update did (e.g. the exact changelog bullet added, whether merged or prepended, its category, and any pruned bullets), or "No bookkeeping update — change has no user-visible effect", or "Project defines no bookkeeping".
      • **Notes** — pre-existing failures, follow-up observations (unrelated issues spotted but deliberately not fixed — one sentence each, naming what and where; these are NOT added to TODO.md, see <implementation> step 4), assumptions made, tasks skipped as vague or as missing/malformed Type, any tests updated (with one-line justification each), and — if a trivial base-merge conflict was auto-resolved in step 4c — which file(s) and how.
    - Ready for review, not draft.
@@ -164,6 +189,8 @@ After every meaningful change during implementation:
 - Never add dependencies, CI changes, or license headers unless the task explicitly requires it.
 - Never delete or rename files not directly required by the task.
 - Never weaken or delete a test purely to make it pass. Tests may only be updated when the task explicitly supersedes the behavior the test was locking down, and such updates must be called out in the commit message and PR body.
+- Never open a PR with <visual_verification> triggered but not run, or run and failed. Looking at the render is part of the definition of done for a visual change, exactly as the test suite is for a behavioral one.
+- Never commit `.verify/` or add it to the repo's `.gitignore`; the workflow owns that folder.
 - Never push or open a PR without running the local test suite first and seeing it pass. There is no WIP escape hatch — a red suite means the routine aborts per <test_verification> step 5, leaving main and the local workspace untouched. The final re-run in <git_workflow> step 4d (after merging base) is part of this guarantee: the pushed branch is always green against the merged state, not just against an isolated diff.
 - When re-syncing with base in <git_workflow> step 4, only trivial mechanical conflicts (e.g. a bookkeeping-file prepend collision) may be auto-resolved, and only by re-applying the project bookkeeping rules. Any conflict in source/logic files requiring behavioral judgment must abort cleanly per <test_verification> step 5 — never guess a source merge.
 - Never open a PR for an entry that carries a `<!-- id: ... -->` marker without reproducing that marker verbatim in the PR body and confirming (readback) that it landed. The marker is the tooling's only link from the entry to its merged PR (resolve / revert / iterate); omitting it silently breaks those lookups and is discoverable only much later. This applies in both modes and must be actively guarded in `backlog` mode, where the id is not supplied to you and must be read from the selected entry's block.

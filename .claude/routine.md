@@ -47,6 +47,12 @@ When the user references a file by bare name (e.g. `main.js`), it lives in `{{SR
 
 The `deploy.yml` workflow handles deployment automatically on merges to `main`. Claude runs do not need to invoke deploy directly.
 
+**Preview (visual verification):** the command that serves this project locally for `routine-base.md`'s `<visual_verification>` step, and the URL it answers on. `none` means this project has nothing to render and the step is skipped.
+```
+{{PREVIEW_COMMAND}}
+```
+Preview URL: `{{PREVIEW_URL}}`
+
 ---
 
 ## Project-specific conventions
