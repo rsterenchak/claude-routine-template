@@ -92,6 +92,7 @@ CHROME=(
   ".github/workflows/manifest.yml|.github/workflows/manifest.yml,.github/workflows/manifest-dotnet.yml,.github/workflows/manifest-sql.yml,.github/workflows/manifest-doc.yml"
   "scripts/gen-src-manifest.js|scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs|scripts/gen-src-manifest.cjs"
+  "scripts/render-check.mjs|scripts/render-check.mjs"
   "docs/mockups/README.md|mockups-README.md"
 )
 # GENERATED: written by a managed workflow, not by onboard.sh, so there is no
@@ -301,7 +302,7 @@ done
 # dest_path_for). node_modules and build output are never managed.
 while IFS= read -r found; do
   rel="${found#"$TARGET"/}"
-  case "$rel" in scripts/gen-src-manifest.*) continue ;; esac   # root copy handled above
+  case "$rel" in scripts/gen-src-manifest.*|scripts/render-check.mjs) continue ;; esac   # root copy handled above
   name="$(basename "$rel")"
   prov="$(ob_provenance "$rel" "$found" "scripts/$name")"
   case "$prov" in
@@ -309,7 +310,7 @@ while IFS= read -r found; do
     *) if [ -n "$FORCE" ]; then DELETE+=("$rel"); DELETE_WHY+=("forced:$prov")
        else HELD+=("$rel"); HELD_WHY+=("$prov"); fi ;;
   esac
-done < <(find "$TARGET" -type f \( -name 'gen-src-manifest.js' -o -name 'gen-src-manifest.cjs' \) \
+done < <(find "$TARGET" -type f \( -name 'gen-src-manifest.js' -o -name 'gen-src-manifest.cjs' -o -name 'render-check.mjs' \) \
            -path '*/scripts/*' -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/dist/*' -not -path '*/bin/*' -not -path '*/obj/*' 2>/dev/null | sort)
 # Generated manifest(s): root, plus beside any generator copy found.
 while IFS= read -r found; do

@@ -68,6 +68,7 @@ NODE_FILES=(
   ".github/workflows/test.yml"
   "scripts/gen-src-manifest.js"
   "scripts/gen-src-manifest.cjs"
+  "scripts/render-check.mjs"
   ".github/workflows/claude-complexity-scan.yml"
   ".github/workflows/claude-scan.yml"
 )
@@ -157,7 +158,7 @@ PF_STALE=()   # preflight only: routine files that exist but differ from the tem
 # which is what made WeatherApp_TOP show a phantom missing file.
 dest_path_for() {
   case "$1" in
-    scripts/gen-src-manifest.*)
+    scripts/gen-src-manifest.*|scripts/render-check.mjs)
       if [ "$WORKING_DIR" = "." ] || [ -z "$WORKING_DIR" ]; then
         printf '%s' "$1"
       else
@@ -823,7 +824,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
             fi
             rm -f "$rc_tmp"
           fi ;;
-        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*)
+        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*|*/scripts/render-check.mjs|scripts/render-check.mjs)
           gm_src="${f%%>*}"
           rc_tmp="$(mktemp)"
           gm_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$gm_src" "$rc_tmp")" || gm_canon=""
@@ -1059,7 +1060,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
             fi
             bf_keep "$bf_canon"; rm -f "$bf_tmp"
           fi ;;
-        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*)
+        */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*|*/scripts/render-check.mjs|scripts/render-check.mjs)
           # Verbatim, no placeholders; dest may be WORKING_DIR-prefixed (see
           # dest_path_for) while history is walked at the plain SRC path.
           bf_tmp="$(mktemp)"
