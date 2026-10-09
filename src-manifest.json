@@ -3,6 +3,6 @@
   "srcRoot": "",
   "regions": [],
   "hasDom": false,
-  "types": [],
-  "lens": "types"
+  "tables": [],
+  "lens": "sql"
 }
