@@ -191,13 +191,21 @@ pf_objarr() {
   printf ']'
 }
 # One `stale[]` entry. $2 empty => JSON null (anchor line missing).
-pf_stale_obj() { # $1=file  $2=lines|""  $3=src  $4=test  $5=reason|""
+# $6 is the local-edit verdict for the file — "no" (the copy IS some template
+# revision; a refresh=stale run will overwrite it), "yes" (carries edits; only
+# refresh=all touches it) or "unknown" (no template history to walk). The app
+# counts the "no" entries to label its Onboard button ("Onboard + refresh N"),
+# so a report without this field makes that count 0 by construction.
+pf_stale_obj() { # $1=file  $2=lines|""  $3=src  $4=test  $5=reason|""  $6=local_edits
   local lines="null"; [ -n "$2" ] && lines="$2"
-  printf '{"file":"%s","lines":%s,"src":"%s","test":"%s"' \
-    "$(pf_esc "$1")" "$lines" "$(pf_esc "$3")" "$(pf_esc "$4")"
+  printf '{"file":"%s","lines":%s,"src":"%s","test":"%s","local_edits":"%s"' \
+    "$(pf_esc "$1")" "$lines" "$(pf_esc "$3")" "$(pf_esc "$4")" "$(pf_esc "${6:-unknown}")"
   [ -n "$5" ] && printf ',"reason":"%s"' "$(pf_esc "$5")"
   printf '}'
 }
+# Collapse rc_local_edits' "no:<sha>" / "yes" / "unknown" to the three words
+# the report carries.
+pf_le() { case "$1" in no:*) printf 'no' ;; yes) printf 'yes' ;; *) printf 'unknown' ;; esac; }
 # The routine-file comparison lives in scripts/lib/routine-compare.sh so
 # check-routine-drift.sh and this script agree byte-for-byte on what "stale"
 # means. Sourced from beside this script when run inside a template checkout
@@ -803,11 +811,14 @@ for f in "${TEMPLATE_FILES[@]}"; do
               case "$rc_res" in
                 stale:anchor)
                   echo "         ${c_yel}stale${c_rst}  $dest_rel  (anchor line missing — predates the current template)"
-                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "" "" "" "anchor line missing — predates the current template")") ;;
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "" "" "" "anchor line missing — predates the current template" "unknown")") ;;
                 stale:*)
                   IFS=: read -r _ rc_n rc_src rc_test <<< "$rc_res"
-                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (${rc_n} lines differ from the template)"
-                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "$rc_n" "$rc_src" "$rc_test" "")") ;;
+                  # Same history walk the backfill uses, so the report says
+                  # which stale files a refresh=stale run would actually touch.
+                  rc_le="$(pf_le "$(rc_local_edits "$rc_name" "$TARGET/$dest_rel" "$SCRIPT_DIR" "$rc_src" "$rc_test")")"
+                  echo "         ${c_yel}stale${c_rst}  $dest_rel  (${rc_n} lines differ from the template; local edits: ${rc_le})"
+                  PF_STALE+=("$(pf_stale_obj "$dest_rel" "$rc_n" "$rc_src" "$rc_test" "" "$rc_le")") ;;
               esac
             fi
             rm -f "$rc_tmp"
@@ -819,8 +830,9 @@ for f in "${TEMPLATE_FILES[@]}"; do
           if [ -n "$gm_canon" ]; then
             gm_n="$(rc_stripped_diff "$gm_canon" "$TARGET/$dest_rel")"
             if [ "$gm_n" != "0" ]; then
-              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${gm_n} lines differ from the template)"
-              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$gm_n" "$gm_src" "generator" "")")
+              gm_le="$(pf_le "$(rc_local_edits_path "$gm_src" "$TARGET/$dest_rel" "$SCRIPT_DIR")")"
+              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${gm_n} lines differ from the template; local edits: ${gm_le})"
+              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$gm_n" "$gm_src" "generator" "" "$gm_le")")
             fi
           fi
           rm -f "$rc_tmp" ;;
@@ -842,8 +854,9 @@ for f in "${TEMPLATE_FILES[@]}"; do
             # spelling differences.
             wf_n="$(rc_stripped_diff "$wf_rt" "$TARGET/$dest_rel")"
             if [ "$wf_n" != "0" ]; then
-              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template)"
-              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "")")
+              wf_le="$(pf_le "$(rc_local_edits_path "$wf_src" "$TARGET/$dest_rel" "$SCRIPT_DIR" "${WF_PAIRS[@]}")")"
+              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template; local edits: ${wf_le})"
+              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "" "$wf_le")")
             fi
           fi
           rm -f "$rc_tmp" "$wf_rt" ;;
