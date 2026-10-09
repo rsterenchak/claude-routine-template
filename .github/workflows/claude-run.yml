@@ -194,6 +194,71 @@ jobs:
           path: .verify/
           retention-days: 14
           if-no-files-found: ignore
+      # The same screenshots, into the app: PNGs go straight to the `verify`
+      # Storage bucket under <repo>/<correlation_id>/ (the repo already holds
+      # the Supabase secrets for its queue writes), then the render manifest
+      # and the agent's verdict (.verify/verdict.json, written by routine-base
+      # <visual_verification> step 3) go to the Worker's verify_result route,
+      # which stores the index on the run's agent_queue row. The run sheet
+      # shows a camera chip on that row and opens the shots on tap. A manual
+      # dispatch has no correlation_id and therefore no row — the artifact
+      # above is its record. Never fails the run: the PR already exists.
+      - name: Publish visual verification to the app
+        if: always() && hashFiles('.verify/manifest.json') != ''
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          REPO: ${{ github.repository }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [ -z "$CORRELATION_ID" ]; then
+            echo "No correlation_id (manual dispatch) — nothing in the app to attach these to; the verify-screenshots artifact is the record."
+            exit 0
+          fi
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ] || [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            echo "Supabase / injector secrets absent — skipping the app publish."
+            exit 0
+          fi
+          PREFIX="${REPO}/${CORRELATION_ID}"
+          BASE="${SUPABASE_URL%/}"
+          n=0
+          for f in .verify/*.png; do
+            [ -e "$f" ] || continue
+            n=$((n + 1))
+            if [ "$n" -gt 16 ]; then echo "More than 16 shots — the rest stay in the artifact only."; break; fi
+            name=$(basename "$f")
+            if curl -sS -f --max-time 60 -X POST "${BASE}/storage/v1/object/verify/${PREFIX}/${name}" \
+                 -H "Authorization: Bearer ${SUPABASE_KEY}" -H "apikey: ${SUPABASE_KEY}" \
+                 -H "Content-Type: image/png" -H "x-upsert: true" \
+                 --data-binary @"$f" -o /dev/null; then
+              echo "  uploaded ${name} ($(wc -c < "$f") bytes)"
+            else
+              echo "  upload FAILED for ${name} — the app will show a broken thumbnail for this shot"
+            fi
+          done
+          [ "$n" -gt 0 ] || { echo "manifest.json present but no PNGs — nothing to publish."; exit 0; }
+          # The verdict is the agent's; a run that aborted mid-verification may
+          # not have written one, and the index is still worth having.
+          if [ -f .verify/verdict.json ] && jq -e . .verify/verdict.json >/dev/null 2>&1; then
+            cp .verify/verdict.json /tmp/verdict.json
+          else
+            echo '{}' > /tmp/verdict.json
+            echo "No usable .verify/verdict.json — publishing the shots without a verdict."
+          fi
+          jq -n --arg repo "$REPO" --arg cid "$CORRELATION_ID" --arg prefix "$PREFIX" --argjson run_id "$RUN_ID" \
+             --slurpfile manifest .verify/manifest.json --slurpfile verdict /tmp/verdict.json \
+             '{verify_result: true, repo: $repo, correlation_id: $cid, prefix: $prefix, run_id: $run_id, manifest: $manifest[0], verdict: $verdict[0]}' \
+             > /tmp/verify-payload.json
+          curl -sS --max-time 30 -X POST "$INJECTOR_URL" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" -H "Content-Type: application/json" \
+            --data @/tmp/verify-payload.json -o /tmp/verify-reply.json \
+            && echo "Worker: $(cat /tmp/verify-reply.json)" \
+            || echo "verify_result POST failed (non-fatal) — shots are in the bucket and the artifact."
       - name: Enforce manual-merge gate
         if: inputs.auto_merge == 'false'
         env:
