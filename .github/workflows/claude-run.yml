@@ -55,7 +55,13 @@ jobs:
           mkdir -p ~/.config/git
           echo ".verify/" >> ~/.config/git/ignore
           git config --global core.excludesFile ~/.config/git/ignore
-          npx --yes playwright install --with-deps chromium
+          # The playwright PACKAGE lives outside the repo (no package.json
+          # change); its own CLI installs a matching Chromium. The routine's
+          # scripts/render-check.mjs imports it via PLAYWRIGHT_MODULE, which
+          # GITHUB_ENV carries into the agent step and every shell it spawns.
+          npm install --prefix /tmp/pw --no-audit --no-fund --silent playwright
+          /tmp/pw/node_modules/.bin/playwright install --with-deps chromium
+          echo "PLAYWRIGHT_MODULE=/tmp/pw/node_modules/playwright/index.mjs" >> "$GITHUB_ENV"
       # Resolve model routing. A kimi-*/deepseek-* pick reroutes EVERY Claude
       # Code call this job makes through the Worker's /anthropic gateway
       # (API-billed at that provider; the subscription is untouched). Vars set
