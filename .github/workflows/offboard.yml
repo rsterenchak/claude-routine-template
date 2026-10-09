@@ -123,15 +123,18 @@ jobs:
             cat /tmp/offboard.json
             exit 0
           fi
-          # Body-flag routing like preflight_result. The Worker has no
-          # offboard_result handler yet; until it does this is rejected and
-          # that is fine — the report is in the log either way, and a
-          # reporting failure must never fail a read-only run.
+          # Same body flag as onboard.yml's preflight report: the Worker's
+          # preflight_result route stores whatever report it is handed in the
+          # run_outputs row the dispatching route minted, so the offboard
+          # report (delete / held / keep) needs no ingest code of its own —
+          # the app reads stdout JSON either way. A manual dispatch has no
+          # correlation_id and is rejected; that is fine — the report is in
+          # the log, and a reporting failure must never fail a read-only run.
           curl -sS -X POST "${INJECTOR_URL}" \
             -H "content-type: application/json" \
             -H "authorization: Bearer ${INJECTOR_SECRET}" \
             --data "$(jq -c --arg cid "$CORRELATION_ID" \
-                 '{offboard_result: true, correlation_id: $cid} + .' /tmp/offboard.json)" \
+                 '{preflight_result: true, correlation_id: $cid} + .' /tmp/offboard.json)" \
             || echo "report POST failed (non-fatal)"
           cat /tmp/offboard.json
 
