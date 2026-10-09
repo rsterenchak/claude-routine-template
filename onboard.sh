@@ -1682,6 +1682,16 @@ if [ $(( ${#files_created[@]} + ${#files_refreshed[@]} )) -gt 0 ]; then
       echo
       ;;
   esac
+else
+  # Nothing to commit: every scaffold file already existed and nothing was
+  # refreshed, so the scaffold is at origin by construction (the target was
+  # just cloned from there). PUSH_OK gates the registry step below on "the
+  # scaffold reached origin" — which it has — so a re-onboard of a current
+  # repo whose registry row was deleted (a plain target delete in the app)
+  # still re-registers it instead of silently skipping the step.
+  PUSH_OK=true
+  echo "${c_dim}Nothing to commit — scaffold already at origin.${c_rst}"
+  echo
 fi
 # ─────────────────────────────────────────────────────────────────
 # 4d. Registry insert (non-interactive / CI only)
