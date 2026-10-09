@@ -129,6 +129,7 @@ files_created=()
 # files held back because local edits couldn't be ruled out (reported only).
 files_refreshed=()
 files_heldback=()
+files_forced=()     # subset of files_refreshed written under ONBOARD_BACKFILL_FORCE
 WRITE_FILES=true   # set by the create-prompt below; may flip false to skip writes
 # ─────────────────────────────────────────────────────────────────
 # Preflight (ONBOARD_PREFLIGHT=1): report-only. Runs detection and the
@@ -233,6 +234,14 @@ info() { echo "${c_dim}$*${c_rst}"; }
 # ─────────────────────────────────────────────────────────────────
 NONINTERACTIVE="${ONBOARD_NONINTERACTIVE:-}"
 if [ -z "$NONINTERACTIVE" ] && [ -n "${CI:-}" ]; then NONINTERACTIVE=1; fi
+# ONBOARD_BACKFILL_FORCE=1: the refresh=all level. ONBOARD_BACKFILL_STALE
+# overwrites managed files it can PROVE unedited and holds the rest; FORCE
+# overwrites the held ones too — a hand-bumped claude-run.yml, a test.yml that
+# predates onboarding — with the current template. The proof still runs (the
+# log says which files were forced), and the authored files (CLAUDE.md,
+# routine.md, style docs, briefs, TODO.md) are never candidates in either
+# level. FORCE implies STALE; it is meaningless on its own.
+if [ -n "${ONBOARD_BACKFILL_FORCE:-}" ]; then ONBOARD_BACKFILL_STALE=1; fi
 # ni_read VAR "prompt" "ni_value" — interactive: read VAR from the terminal;
 # non-interactive: VAR=ni_value (no terminal read).
 ni_read() {
@@ -1021,6 +1030,10 @@ for f in "${TEMPLATE_FILES[@]}"; do
     # lens never lights up). CLAUDE.md and routine.md are never candidates:
     # customized per repo by design, no canonical form to refresh toward.
     bf_res=""
+    # The canonical copy outlives the per-arm temp cleanup only when FORCE
+    # may need to write it; freed on every exit from the case below.
+    bf_force_src=""
+    bf_keep() { if [ -n "${ONBOARD_BACKFILL_FORCE:-}" ] && [ -n "$1" ]; then bf_force_src="$(mktemp)"; cp "$1" "$bf_force_src"; fi; }
     if [ -n "${ONBOARD_BACKFILL_STALE:-}" ] && [ -n "$RC_LIB" ]; then
       case "$dest_rel" in
         .claude/*.md)
@@ -1031,7 +1044,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
             if [ -n "$bf_canon" ]; then
               bf_res="$(rc_backfill_file "$bf_name" "$bf_canon" "$dest" "$SCRIPT_DIR")"
             fi
-            rm -f "$bf_tmp"
+            bf_keep "$bf_canon"; rm -f "$bf_tmp"
           fi ;;
         */scripts/gen-src-manifest.*|scripts/gen-src-manifest.*)
           # Verbatim, no placeholders; dest may be WORKING_DIR-prefixed (see
@@ -1041,7 +1054,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
           if [ -n "$bf_canon" ]; then
             bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR")"
           fi
-          rm -f "$bf_tmp" ;;
+          bf_keep "$bf_canon"; rm -f "$bf_tmp" ;;
         .github/workflows/*.yml)
           bf_tmp="$(mktemp)"
           bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
@@ -1050,9 +1063,25 @@ for f in "${TEMPLATE_FILES[@]}"; do
             # …) the way 4b would; placeholder-free ones render as identity.
             bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR" "${WF_PAIRS[@]}")"
           fi
-          rm -f "$bf_tmp" ;;
+          bf_keep "$bf_canon"; rm -f "$bf_tmp" ;;
       esac
     fi
+    # FORCE: a held file is overwritten with the RAW canonical (placeholders
+    # and all), exactly as a freshly created file would be — section 4b's
+    # substitution pass runs over every PLACEHOLDER_FILES path that exists,
+    # created or not, so the render lands the same way. Verbatim files
+    # (routine-base.md, the generators) have nothing to render.
+    case "$bf_res" in
+      skip:local:*|skip:unknown:*|skip:anchor)
+        if [ -n "${ONBOARD_BACKFILL_FORCE:-}" ] && [ -n "$bf_force_src" ]; then
+          bf_why="${bf_res#skip:}"; bf_why="${bf_why%%:*}"
+          cp "$bf_force_src" "$dest"; rm -f "$bf_force_src"
+          echo "  ${c_yel}forced${c_rst}  $dest_rel  (stale, ${bf_why} edits — overwritten with the current template)"
+          files_refreshed+=("$dest_rel"); files_forced+=("$dest_rel")
+          continue
+        fi ;;
+    esac
+    rm -f "$bf_force_src"
     case "$bf_res" in
       refreshed:*)
         bf_n="${bf_res#refreshed:}"; bf_n="${bf_n%%:*}"
@@ -1086,7 +1115,7 @@ for f in "${TEMPLATE_FILES[@]}"; do
   fi
 done
 echo
-echo "${c_bold}Summary:${c_rst} $created created, ${#files_refreshed[@]} refreshed, $skipped skipped (existed; ${#files_heldback[@]} held back), $failed failed."
+echo "${c_bold}Summary:${c_rst} $created created, ${#files_refreshed[@]} refreshed (${#files_forced[@]} forced), $skipped skipped (existed; ${#files_heldback[@]} held back), $failed failed."
 echo
 fi   # end "$WRITE_FILES" guard around the fetch/write loop
 # ─────────────────────────────────────────────────────────────────
@@ -1581,6 +1610,7 @@ if [ $(( ${#files_created[@]} + ${#files_refreshed[@]} )) -gt 0 ]; then
   commit_msg="Scaffold Claude routine pipeline"
   if [ ${#files_refreshed[@]} -gt 0 ]; then
     commit_msg="Scaffold/refresh Claude routine pipeline (${#files_refreshed[@]} refreshed)"
+    [ ${#files_forced[@]} -gt 0 ] && commit_msg="Refresh Claude routine pipeline to current template (${#files_refreshed[@]} refreshed, ${#files_forced[@]} forced)"
   fi
   # Compose the manual-recovery command block once, used in both branches.
   manual_cmds=$(printf '       cd %s\n' "$TARGET"
