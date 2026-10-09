@@ -100,30 +100,6 @@ Follow the printed checklist. The script gets you the files, the shape-appropria
 
 The README's "What to do after creating a repo from this template" section is the full checklist — the steps are identical whether you came via the template button or this script. The one difference: this script auto-fills the placeholders and picks the workflow for your shape, so you skip the manual variant-selection and placeholder-filling steps.
 
-# Doc additions — refresh + offboard
-
-Two insertions. Paste as-is.
-
----
-
-## 1. `README.md` — append to the end of `## After onboarding` (after the `routine-base.md` bullet, before the `---`)
-
-```markdown
-- **Keeping the scaffold current** — re-dispatch **Onboard a repo** with the `refresh` input:
-  - `none` (default) — create what's missing, touch nothing that exists.
-  - `stale` — also overwrite the managed files (routine files, workflows, manifest generators) that are stale **and** provably unedited — the copy matches some template revision byte-for-byte after placeholder rendering. Anything with local edits is held and listed.
-  - `all` — overwrite the held ones too. For a `claude-run.yml` you hand-bumped or a `test.yml` that predates onboarding. One commit, files keep their history.
-
-  Authored files — `CLAUDE.md`, `.claude/routine.md`, the style docs, `assignment.md` / `project.md`, `TODO.md` — are never candidates at any level. Secrets, Pages and the inject-target row are re-set idempotently; projects stay routed.
-
-- **Taking a repo out** — dispatch **Offboard a repo** (or `./offboard.sh <path>` from a full template checkout). Deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge=true` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force=true` overrides. `preflight=true` lists everything and changes nothing.
-```
-
----
-
-## 2. `ONBOARD.md` — new section after `## After running`
-
-```markdown
 ## Refreshing and undoing
 
 **Onboard brings a repo current. Offboard takes it out.** Two scripts, one axis each.
@@ -133,8 +109,10 @@ Two insertions. Paste as-is.
 | create the missing scaffold | `onboard.sh` (default) |
 | update managed files that nobody edited | `onboard.sh` with `ONBOARD_BACKFILL_STALE=1` · workflow `refresh=stale` |
 | update every managed file, local edits included | `onboard.sh` with `ONBOARD_BACKFILL_FORCE=1` · workflow `refresh=all` |
-| strip the scaffold, keep the repo's own docs | `offboard.sh <path>` · workflow **Offboard a repo** |
-| strip everything onboard ever wrote | `offboard.sh --purge <path>` · workflow `purge=true` |
+| see what a refresh would touch | `ONBOARD_PREFLIGHT=1` · workflow `preflight=true` · the row's **check** in the app — each stale file carries `local_edits` |
+| strip the scaffold, keep the repo's own docs | `offboard.sh <path>` · workflow **Offboard a repo** · app: delete target / project with the offboard box ticked |
+| strip everything onboard ever wrote | `offboard.sh --purge <path>` · workflow `purge=true` · app: the `purge` sub-option |
+| see what an offboard would delete | `offboard.sh --dry-run <path>` · workflow `preflight=true` (Actions tab only) |
 
 *Managed* files: `.claude/routine-base.md`, `triage.md`, `derive.md`, `project-derive.md`; `.github/workflows/claude-*.yml`, `test.yml`, `deploy.yml`, `manifest.yml`, `run-capture.yml`; `scripts/gen-src-manifest.*`; generated `src-manifest.json`; `docs/mockups/README.md`.
 *Authored* files: `CLAUDE.md`, `.claude/routine.md`, `.claude/style.md`, `.claude/commenting-style.md`, `assignment.md`, `project.md`, `TODO.md`. Refresh never touches them; only `--purge` deletes them.
@@ -143,5 +121,4 @@ Both scripts share one proof: a managed file is "unedited" when its bytes match 
 
 `refresh=all` overwrites in place and cannot remove a managed file the template has *stopped shipping*; for that exact-template state, offboard then onboard.
 
-Why offboard deletes the registry row and refresh never does: `projects.target_id` is an `ON DELETE SET NULL` FK onto `inject_targets.id`. Deleting the row unroutes the project — right when you're leaving, wrong when you're updating.
-```
+Why offboard deletes the registry row and refresh never does: `projects.target_id` is an `ON DELETE SET NULL` FK onto `inject_targets.id`. Deleting the row unroutes the project — right when you're leaving, wrong when you're updating. In the app the two are one gesture on purpose: an offboarded repo has no reason to stay listed, so offboard rides on the target's (or project's) Delete confirm, dispatch first and delete second, so a failed dispatch leaves the target in place.

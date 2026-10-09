@@ -217,6 +217,19 @@ Delete or replace `README.md` with your project's docs. Also delete `ONBOARD.md`
 - **`TODO.md`** — the backlog. Add entries via the PWA or paste directly.
 - **`.claude/routine.md`** — project-specific operational doc. Update when commands change.
 - **`.claude/routine-base.md`** — universal; don't edit per-project. Propose changes upstream so all repos benefit.
+- **Keeping the scaffold current** — re-dispatch **Onboard a repo** (Actions tab, or the app's onboard sub-modal) with the `refresh` level:
+  - `none` (default) — create what's missing, touch nothing that exists.
+  - `stale` — also overwrite the managed files (routine files, workflows, manifest generators) that are stale **and** provably unedited — the copy matches some template revision byte-for-byte after placeholder rendering. Anything with local edits is held and listed.
+  - `all` — overwrite the held ones too. For a `claude-run.yml` you hand-bumped or a `test.yml` that predates onboarding. One commit, files keep their history.
+
+  Authored files — `CLAUDE.md`, `.claude/routine.md`, the style docs, `assignment.md` / `project.md`, `TODO.md` — are never candidates at any level. Secrets, Pages and the inject-target row are re-set idempotently; projects stay routed. Preflight (`preflight=true`, or the row's **check** in the app) lists each stale file with `local_edits: no | yes | unknown`, so you can see what `stale` would touch before running it.
+
+- **Taking a repo out** — three ways, all ending in the same `offboard.sh` run:
+  - In the app, **delete the target** with "Also strip the repo's scaffold and secrets (offboard)" ticked, or **delete the project** when it is the only one routed to that target — the same checkbox appears in the confirm. `purge` and `force` are sub-options, both off by default.
+  - **Offboard a repo** from the Actions tab — the only path that offers `preflight=true` (list what would be deleted / held / kept, change nothing) and the only way to offboard a repo while keeping it registered.
+  - `./offboard.sh [--purge] [--force] [--dry-run] <path>` from a full template checkout.
+
+  Offboard deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force` overrides.
 
 ---
 
@@ -274,49 +287,3 @@ Either the manifest hasn't been picked up yet (hard-refresh the PWA — the fetc
 The Claude routine has 10+ moving parts that must be configured consistently across repos, and several distinct project shapes — web (build-pipeline, served-from-source), .NET (console, desktop, maui), SQL, and repo-only — that need different test/deploy/manifest wiring. Onboarding from scratch each time meant re-deriving what files go where, what commands wire up, and which settings need flipping. This template captures the answers once so subsequent onboardings are mechanical rather than archaeological.
 
 If you hit a project shape this template doesn't cover well, the right move is to onboard once, learn what's missing, and update the template — not to fork it per-project. The served-from-source, console, .NET-desktop/MAUI, and SQL shapes were all added exactly this way: a real (often throwaway) repo of that shape exposed where the assumptions didn't fit, the gaps were fixed in the template, and the next repo of that shape onboarded cleanly. That throwaway-repo-then-fix loop is the intended way to extend this to new shapes (a Python or Java variant would follow the same path).
-
-# Doc additions — refresh + offboard
-
-Two insertions. Paste as-is.
-
----
-
-## 1. `README.md` — append to the end of `## After onboarding` (after the `routine-base.md` bullet, before the `---`)
-
-```markdown
-- **Keeping the scaffold current** — re-dispatch **Onboard a repo** with the `refresh` input:
-  - `none` (default) — create what's missing, touch nothing that exists.
-  - `stale` — also overwrite the managed files (routine files, workflows, manifest generators) that are stale **and** provably unedited — the copy matches some template revision byte-for-byte after placeholder rendering. Anything with local edits is held and listed.
-  - `all` — overwrite the held ones too. For a `claude-run.yml` you hand-bumped or a `test.yml` that predates onboarding. One commit, files keep their history.
-
-  Authored files — `CLAUDE.md`, `.claude/routine.md`, the style docs, `assignment.md` / `project.md`, `TODO.md` — are never candidates at any level. Secrets, Pages and the inject-target row are re-set idempotently; projects stay routed.
-
-- **Taking a repo out** — dispatch **Offboard a repo** (or `./offboard.sh <path>` from a full template checkout). Deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge=true` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force=true` overrides. `preflight=true` lists everything and changes nothing.
-```
-
----
-
-## 2. `ONBOARD.md` — new section after `## After running`
-
-```markdown
-## Refreshing and undoing
-
-**Onboard brings a repo current. Offboard takes it out.** Two scripts, one axis each.
-
-| want | run |
-|---|---|
-| create the missing scaffold | `onboard.sh` (default) |
-| update managed files that nobody edited | `onboard.sh` with `ONBOARD_BACKFILL_STALE=1` · workflow `refresh=stale` |
-| update every managed file, local edits included | `onboard.sh` with `ONBOARD_BACKFILL_FORCE=1` · workflow `refresh=all` |
-| strip the scaffold, keep the repo's own docs | `offboard.sh <path>` · workflow **Offboard a repo** |
-| strip everything onboard ever wrote | `offboard.sh --purge <path>` · workflow `purge=true` |
-
-*Managed* files: `.claude/routine-base.md`, `triage.md`, `derive.md`, `project-derive.md`; `.github/workflows/claude-*.yml`, `test.yml`, `deploy.yml`, `manifest.yml`, `run-capture.yml`; `scripts/gen-src-manifest.*`; generated `src-manifest.json`; `docs/mockups/README.md`.
-*Authored* files: `CLAUDE.md`, `.claude/routine.md`, `.claude/style.md`, `.claude/commenting-style.md`, `assignment.md`, `project.md`, `TODO.md`. Refresh never touches them; only `--purge` deletes them.
-
-Both scripts share one proof: a managed file is "unedited" when its bytes match **some** revision of its template source (placeholders treated as wildcards, workflow comments ignored). The proof needs the template's git history, so run from a full clone — `onboard.yml` / `offboard.yml` check out with `fetch-depth: 0`. A shallow or absent checkout can only match the current copy; stale-but-unedited files then read as held, which is the conservative failure.
-
-`refresh=all` overwrites in place and cannot remove a managed file the template has *stopped shipping*; for that exact-template state, offboard then onboard.
-
-Why offboard deletes the registry row and refresh never does: `projects.target_id` is an `ON DELETE SET NULL` FK onto `inject_targets.id`. Deleting the row unroutes the project — right when you're leaving, wrong when you're updating.
-```
