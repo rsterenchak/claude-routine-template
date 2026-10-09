@@ -1279,6 +1279,38 @@ subst() { # $1=file  $2=key  $3=value
 # Files that carry placeholders (relative to target). Skip any that were skipped
 # during creation (already existed — don't rewrite the user's own file) and any
 # that don't exist.
+# Preview — how the routine's <visual_verification> step serves the project
+# so it can screenshot a change before opening the PR. Port 4173 everywhere.
+#   build-pipeline with a Vite config → `vite preview`, which honours the
+#     app's `base:` (a GitHub Pages project site is served under /<repo>/ and
+#     its asset URLs are absolute to that base, so a plain static server at /
+#     404s every asset). The URL carries that base too.
+#   any other build-pipeline → python's static server on the build dir (the
+#     runner always has python3; nothing to install).
+#   served-from-source → the same server on the working dir.
+#   .NET / sql / repo-only → none; the routine skips the step.
+PREVIEW_URL_VAL="http://localhost:4173/"
+case "$SHAPE" in
+  build-pipeline)
+    _vite_cfg=""
+    for _c in vite.config.js vite.config.ts vite.config.mjs; do
+      [ -f "$WD_ABS/$_c" ] && _vite_cfg="$WD_ABS/$_c" && break
+    done
+    if [ -n "$_vite_cfg" ]; then
+      PREVIEW_CMD_VAL="npx vite preview --port 4173 --strictPort"
+      _base="$(sed -nE "s/^[[:space:]]*base:[[:space:]]*['\"]([^'\"]*)['\"].*/\1/p" "$_vite_cfg" | head -1)"
+      if [ -n "$_base" ] && [ "$_base" != "/" ]; then
+        _base="/${_base#/}"; _base="${_base%/}/"
+        PREVIEW_URL_VAL="http://localhost:4173${_base}"
+      fi
+    else
+      PREVIEW_CMD_VAL="python3 -m http.server 4173 --directory ${BUILD_DIR_VAL%/}"
+    fi ;;
+  served-from-source)
+    PREVIEW_CMD_VAL="python3 -m http.server 4173 --directory ." ;;
+  *)
+    PREVIEW_CMD_VAL="none"; PREVIEW_URL_VAL="none" ;;
+esac
 PLACEHOLDER_FILES=(
   "CLAUDE.md"
   ".claude/routine.md"
@@ -1312,6 +1344,8 @@ for pf in "${PLACEHOLDER_FILES[@]}"; do
   subst "$fpath" "TEST_COMMAND" "$TEST_CMD_VAL"
   subst "$fpath" "BUILD_COMMAND" "$BUILD_CMD_VAL"
   subst "$fpath" "DEPLOY_TARGET" "$DEPLOY_TARGET_VAL"
+  subst "$fpath" "PREVIEW_COMMAND" "$PREVIEW_CMD_VAL"
+  subst "$fpath" "PREVIEW_URL" "$PREVIEW_URL_VAL"
   subst "$fpath" "MANIFEST_VARIANT" "$MANIFEST_VARIANT"
   [ -n "$DOTNET_VERSION_VAL" ] && subst "$fpath" "DOTNET_VERSION" "$DOTNET_VERSION_VAL"
   subst "$fpath" "MANIFEST_SRC_ROOT" "$MANIFEST_SRC_ROOT_VAL"

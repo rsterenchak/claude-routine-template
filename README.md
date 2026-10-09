@@ -231,6 +231,8 @@ Delete or replace `README.md` with your project's docs. Also delete `ONBOARD.md`
 
   Offboard deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force` overrides.
 
+- **Visual verification** — a run that changes a presentational file (CSS, HTML, JSX, …), or whose entry carries a `Verify:` line, renders the result before opening the PR and the agent *looks at it*: `claude-run.yml` installs Chromium on Node shapes, the routine builds, serves the project with the preview command in `.claude/routine.md`, screenshots each viewport × route with Playwright's CLI, reads the PNGs and judges them against the entry — a failed shot is a failed test. The shots are attached to the run as the `verify-screenshots` artifact and the PR body carries a **Visual** verdict. Entry syntax: `- Verify: 1300x900, 1300x700 → /, /play`; with no line, a presentational change renders `1300x900`, `1300x700` and `390x844` on `/`. Repos onboarded before this exists lack the preview section in `routine.md`; the routine derives the command from the shape until you add it (`vite preview` for Vite repos, python's static server otherwise).
+
 ---
 
 ## Troubleshooting common onboarding issues
