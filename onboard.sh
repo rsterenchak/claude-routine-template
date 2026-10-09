@@ -1747,8 +1747,12 @@ if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
   reg_nickname="${ONBOARD_NICKNAME:-${PROJECT_NAME:-$REPO_FOR_GH}}"
   reg_src_prefix="${SRC_PREFIX:-}"
   case "$reg_src_prefix" in "("*) reg_src_prefix="" ;; esac
+  # ilike with no wildcard = exact match, case-insensitively. GitHub slugs are
+  # case-insensitive and the app stores whatever was typed, so an `eq.` here
+  # missed a lowercase row and inserted a second one; the registry now also
+  # carries a unique index on (user_id, lower(repo)) that would reject that.
   reg_existing=$(curl -sS \
-    "$reg_base/rest/v1/inject_targets?select=id&repo=eq.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
+    "$reg_base/rest/v1/inject_targets?select=id&repo=ilike.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
     -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
     -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" 2>/dev/null || echo "")
   if printf '%s' "$reg_existing" | grep -q '"id"'; then
@@ -1757,7 +1761,7 @@ if [ -n "$NONINTERACTIVE" ] && [ "${PUSH_OK:-false}" = "true" ] \
     # re-run answered "personal" silently flip an assignment repo. Surface the
     # mismatch instead so it can be corrected deliberately.
     reg_purpose=$(curl -sS \
-      "$reg_base/rest/v1/inject_targets?select=purpose&repo=eq.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
+      "$reg_base/rest/v1/inject_targets?select=purpose&repo=ilike.$REPO_FOR_GH&user_id=eq.$ONBOARD_USER_ID" \
       -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
       -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" 2>/dev/null \
       | sed -n 's/.*"purpose"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
