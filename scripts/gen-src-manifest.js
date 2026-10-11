@@ -625,19 +625,28 @@ function readJsonFile(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return undefined; }
 }
 
+// A step whose symbol is TOUR_FILE_SYMBOL anchors to the whole file — for
+// top-level code no named definition wraps (`parent` is ignored).
+const TOUR_FILE_SYMBOL = '@file';
+
 // { line, lines } for a step, or { error } naming why it didn't resolve.
 // `lines` are the 1-based matched lines, ascending.
 function resolveTourStep(step, symbols, fileLines) {
   const entry = symbols && symbols.files ? symbols.files[step.file] : null;
   if (!entry) return { error: 'file not in symbols index' };
-  const hasParent = step.parent !== undefined && step.parent !== null;
-  const defs = entry.defs.filter(function (d) {
-    return d.name === step.symbol && (!hasParent || d.parent === step.parent);
-  });
-  if (!defs.length) return { error: 'symbol not found' };
-  if (defs.length > 1) return { error: 'symbol is ambiguous (' + defs.length + ' defs) — add a parent' };
-  const def = defs[0];
   const lines = fileLines[step.file] || [];
+  let def;
+  if (step.symbol === TOUR_FILE_SYMBOL) {
+    def = { start: 1, end: lines.length };
+  } else {
+    const hasParent = step.parent !== undefined && step.parent !== null;
+    const defs = entry.defs.filter(function (d) {
+      return d.name === step.symbol && (!hasParent || d.parent === step.parent);
+    });
+    if (!defs.length) return { error: 'symbol not found' };
+    if (defs.length > 1) return { error: 'symbol is ambiguous (' + defs.length + ' defs) — add a parent' };
+    def = defs[0];
+  }
   const match = Array.isArray(step.match) ? step.match : [];
   if (!match.length) return { error: 'no match strings' };
   const hits = [];
@@ -646,7 +655,7 @@ function resolveTourStep(step, symbols, fileLines) {
     let found = 0;
     for (let n = from; n <= def.end; n++) {
       if (lines[n - 1] !== undefined && lines[n - 1].indexOf(match[m]) !== -1) {
-        if (m === 0 && found) return { error: 'first match "' + match[0] + '" is not unique in ' + step.symbol };
+        if (m === 0 && found) return { error: 'first match "' + match[0] + '" is not unique in ' + (step.symbol === TOUR_FILE_SYMBOL ? step.file : step.symbol) };
         if (!found) found = n;
         if (m !== 0) break;
       }
@@ -708,7 +717,7 @@ function compileTours(doc, symbols, sources, areas, warn) {
       steps.push({
         file: step.file,
         symbol: step.symbol,
-        parent: step.parent === undefined ? null : step.parent,
+        parent: step.parent === undefined || step.symbol === TOUR_FILE_SYMBOL ? null : step.parent,
         title: step.title,
         why: step.why,
         line: r.line,
@@ -721,7 +730,9 @@ function compileTours(doc, symbols, sources, areas, warn) {
       say('Warning: codetour.json: tour "' + tour.id + '" has ' + steps.length + ' resolved step(s), needs ' + TOUR_MIN_STEPS + ' — tour dropped');
       return;
     }
-    steps.forEach(function (s, i) { s.next = i + 1 < steps.length ? steps[i + 1].symbol : null; });
+    // A whole-file step is labelled by its file name, not `@file`.
+    const label = function (s) { return s.symbol === TOUR_FILE_SYMBOL ? s.file.split('/').pop() : s.symbol; };
+    steps.forEach(function (s, i) { s.next = i + 1 < steps.length ? label(steps[i + 1]) : null; });
     tours.push({ id: tour.id, section: tour.section, title: tour.title, recap: Array.isArray(tour.recap) ? tour.recap : [], steps: steps });
   });
   return { version: TOURS_VERSION, sections: (doc && Array.isArray(doc.sections)) ? doc.sections : [], tours: tours };
