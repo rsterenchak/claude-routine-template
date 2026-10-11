@@ -46,6 +46,11 @@
 // index for code tracing: { version, files: { path: { defs: [{ name, kind,
 // start, end, parent }], imports: { localName: { from, name } } } } }. Kept
 // separate because the PWA fetches it lazily; never timestamped.
+//
+// When a committed codetour.json sits beside scripts/, web mode also compiles
+// it into src-tours.json — guided code tours whose steps are anchored by
+// symbol + match text and enriched with line, area, next and an embedded
+// snippet. Deterministic; steps that no longer resolve are warned and dropped.
 // ─────────────────────────────────────────────────────────────────
 
 const fs = require('fs');
@@ -601,6 +606,150 @@ function buildWebManifest(opts) {
   return manifest;
 }
 
+// ── web code tours (codetour.json → src-tours.json) ───────────────
+// Guided walkthroughs for the Structure tab. A committed codetour.json anchors
+// each step to a definition (file + symbol, + parent when given) and a list of
+// `match` substrings found in order inside that definition — never a line
+// number — so tours survive edits. Compiled against the symbols index from the
+// same run into real lines, the step's area and an embedded snippet, so the
+// PWA needs no extra fetches. Steps that no longer resolve are dropped with a
+// warning; a tour left with fewer than TOUR_MIN_STEPS is dropped too.
+const TOURS_VERSION = 1;
+const TOUR_MIN_STEPS = 3;
+const TOUR_SNIPPET_MAX_ROWS = 12;
+// Clusters separated by more than this many hidden lines get a gap row;
+// closer ones are joined by the lines between them.
+const TOUR_SNIPPET_MAX_JOIN = 2;
+
+function readJsonFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return undefined; }
+}
+
+// { line, lines } for a step, or { error } naming why it didn't resolve.
+// `lines` are the 1-based matched lines, ascending.
+function resolveTourStep(step, symbols, fileLines) {
+  const entry = symbols && symbols.files ? symbols.files[step.file] : null;
+  if (!entry) return { error: 'file not in symbols index' };
+  const hasParent = step.parent !== undefined && step.parent !== null;
+  const defs = entry.defs.filter(function (d) {
+    return d.name === step.symbol && (!hasParent || d.parent === step.parent);
+  });
+  if (!defs.length) return { error: 'symbol not found' };
+  if (defs.length > 1) return { error: 'symbol is ambiguous (' + defs.length + ' defs) — add a parent' };
+  const def = defs[0];
+  const lines = fileLines[step.file] || [];
+  const match = Array.isArray(step.match) ? step.match : [];
+  if (!match.length) return { error: 'no match strings' };
+  const hits = [];
+  for (let m = 0; m < match.length; m++) {
+    const from = m === 0 ? def.start : hits[m - 1] + 1;
+    let found = 0;
+    for (let n = from; n <= def.end; n++) {
+      if (lines[n - 1] !== undefined && lines[n - 1].indexOf(match[m]) !== -1) {
+        if (m === 0 && found) return { error: 'first match "' + match[0] + '" is not unique in ' + step.symbol };
+        if (!found) found = n;
+        if (m !== 0) break;
+      }
+    }
+    if (!found) return { error: 'match "' + match[m] + '" not found' + (m ? ' after "' + match[m - 1] + '"' : '') };
+    hits.push(found);
+  }
+  return { line: hits[0], lines: hits };
+}
+
+// Snippet rows for the matched `hits`: each with one line of context either
+// side, clusters closed by gap rows, indentation trimmed per cluster, capped.
+function buildTourSnippet(lines, hits) {
+  const total = lines.length;
+  const ranges = [];
+  hits.forEach(function (n) {
+    const lo = Math.max(1, n - 1), hi = Math.min(total, n + 1);
+    const last = ranges[ranges.length - 1];
+    if (last && lo - last.hi - 1 <= TOUR_SNIPPET_MAX_JOIN) last.hi = Math.max(last.hi, hi);
+    else ranges.push({ lo: lo, hi: hi });
+  });
+  const hitSet = new Set(hits);
+  const rows = [];
+  ranges.forEach(function (r, i) {
+    if (i) rows.push({ gap: true });
+    const raw = [];
+    for (let n = r.lo; n <= r.hi; n++) raw.push(String(lines[n - 1]).replace(/\r$/, ''));
+    const indents = raw.filter(function (t) { return t.trim(); }).map(function (t) { return t.match(/^[ \t]*/)[0].length; });
+    const cut = indents.length ? Math.min.apply(null, indents) : 0;
+    raw.forEach(function (t, k) {
+      rows.push({ n: r.lo + k, t: t.trim() ? t.slice(cut) : '', hi: hitSet.has(r.lo + k) });
+    });
+  });
+  const capped = rows.slice(0, TOUR_SNIPPET_MAX_ROWS);
+  while (capped.length && capped[capped.length - 1].gap) capped.pop();
+  return capped;
+}
+
+// { version, sections, tours } compiled from a parsed codetour.json.
+// `sources` is the { name, text } list the symbols were built from; `areas`
+// the codemap areas (optional).
+function compileTours(doc, symbols, sources, areas, warn) {
+  const say = warn || console.warn;
+  const fileLines = {};
+  (Array.isArray(sources) ? sources : []).forEach(function (s) { if (s) fileLines[s.name] = s.text.split('\n'); });
+  const areaOf = {};
+  (Array.isArray(areas) ? areas : []).forEach(function (a) {
+    ((a && Array.isArray(a.files)) ? a.files : []).forEach(function (f) { if (!(f in areaOf)) areaOf[f] = a.id; });
+  });
+  const tours = [];
+  ((doc && Array.isArray(doc.tours)) ? doc.tours : []).forEach(function (tour) {
+    const steps = [];
+    (Array.isArray(tour.steps) ? tour.steps : []).forEach(function (step, i) {
+      const r = resolveTourStep(step, symbols, fileLines);
+      if (r.error) {
+        say('Warning: codetour.json: tour "' + tour.id + '" step ' + (i + 1) + ' (' + step.file + ' › ' + step.symbol + '): ' + r.error + ' — step dropped');
+        return;
+      }
+      steps.push({
+        file: step.file,
+        symbol: step.symbol,
+        parent: step.parent === undefined ? null : step.parent,
+        title: step.title,
+        why: step.why,
+        line: r.line,
+        area: areaOf[step.file] === undefined ? null : areaOf[step.file],
+        next: null,
+        snippet: buildTourSnippet(fileLines[step.file], r.lines),
+      });
+    });
+    if (steps.length < TOUR_MIN_STEPS) {
+      say('Warning: codetour.json: tour "' + tour.id + '" has ' + steps.length + ' resolved step(s), needs ' + TOUR_MIN_STEPS + ' — tour dropped');
+      return;
+    }
+    steps.forEach(function (s, i) { s.next = i + 1 < steps.length ? steps[i + 1].symbol : null; });
+    tours.push({ id: tour.id, section: tour.section, title: tour.title, recap: Array.isArray(tour.recap) ? tour.recap : [], steps: steps });
+  });
+  return { version: TOURS_VERSION, sections: (doc && Array.isArray(doc.sections)) ? doc.sections : [], tours: tours };
+}
+
+// The compiled tours for the web source under `srcDir`, or null when
+// codetour.json is absent (nothing is written then).
+function buildWebTours(opts) {
+  const o = opts || {};
+  const root = o.srcDir || srcDir;
+  const doc = readJsonFile(o.tourPath || path.resolve(root, '..', 'codetour.json'));
+  if (!doc) return null;
+  const sources = readWebSources(root).sources;
+  const symbols = o.symbols || buildSymbols(sources);
+  const areas = readCodemapAreas(o.codemapPath || path.resolve(root, '..', 'codemap.json'));
+  return compileTours(doc, symbols, sources, areas, o.warn);
+}
+
+// Writes src-tours.json into `outDir` when codetour.json exists; returns the
+// compiled tours, or null when nothing was written.
+function writeWebTours(opts) {
+  const o = opts || {};
+  const tours = buildWebTours(o);
+  if (!tours) return null;
+  fs.writeFileSync(path.join(o.outDir || outDir, 'src-tours.json'), JSON.stringify(tours));
+  return tours;
+}
+
 // ── csharp mode: recursive .cs inventory, repo-root-relative paths ──
 const CS_SKIP_DIRS = { bin: 1, obj: 1, '.git': 1, '.vs': 1, '.idea': 1, node_modules: 1, packages: 1, TestResults: 1, dist: 1 };
 const CS_SKIP_FILE = /\.(?:Designer|g|g\.i|AssemblyInfo)\.cs$/i;
@@ -973,7 +1122,7 @@ function buildManifest() {
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, scanCsharpTypes: scanCsharpTypes, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
+module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, compileTours: compileTours, buildWebTours: buildWebTours, writeWebTours: writeWebTours, scanCsharpTypes: scanCsharpTypes, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
 
 if (require.main === module) {
   const manifest = buildManifest();
@@ -996,5 +1145,10 @@ if (require.main === module) {
     fs.writeFileSync(path.join(outDir, 'src-symbols.json'), json);
     const defCount = Object.keys(symbols.files).reduce(function (n, f) { return n + symbols.files[f].defs.length; }, 0);
     console.log('src-symbols.json written to ' + outDirName + '/ —', defCount, 'defs,', (Buffer.byteLength(json) / 1024).toFixed(1) + ' KB');
+    const tours = writeWebTours({ symbols: symbols });
+    if (tours) {
+      const stepCount = tours.tours.reduce(function (n, t) { return n + t.steps.length; }, 0);
+      console.log('src-tours.json written to ' + outDirName + '/ —', tours.tours.length, 'tours,', stepCount, 'steps');
+    }
   }
 }
