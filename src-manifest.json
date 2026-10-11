@@ -3,6 +3,5 @@
   "srcRoot": "",
   "regions": [],
   "hasDom": false,
-  "tables": [],
-  "lens": "sql"
+  "lens": "doc"
 }
