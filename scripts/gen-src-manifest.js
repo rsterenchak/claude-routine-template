@@ -33,7 +33,9 @@
 //                          are always emitted repo-root-relative.
 //
 // Manifest shape (additive — `files` keeps its prior meaning): files, srcRoot,
-// regions, hasDom, lens ("ui" | "types" | "sql"), and — in csharp mode — types
+// regions, hasDom, lens ("ui" | "types" | "sql"), and — in web mode — modules
+// (per-JS-file lines/imports/purpose) plus areas (copied from a committed
+// codemap.json beside scripts/, omitted when absent), or — in csharp mode — types
 // (a per-type outline, each with a members list), or — in sql mode — tables (a
 // per-table outline, each with a columns list). Plus generatedAt/sha unless
 // deterministic. A repo with no source is handled gracefully (empty
@@ -177,19 +179,142 @@ function walkWeb(start) {
   return out;
 }
 
-function buildWebManifest() {
+// ── web module graph: per-JS-file line count, local imports, purpose ──
+// Feeds the Structure tab's Map lens. Best-effort regex parse, NOT a JS
+// parser: only relative specifiers are followed (package imports are ignored)
+// and whole-line `//` comments are skipped so a commented-out import doesn't
+// draw an edge.
+const MODULE_PURPOSE_MAX = 140;
+const IMPORT_FROM_RE = /\bimport\s+[^'"`;()=]*?\bfrom\s*['"]([^'"]+)['"]/g;
+const EXPORT_FROM_RE = /\bexport\s+[^'"`;()=]*?\bfrom\s*['"]([^'"]+)['"]/g;
+const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g;
+
+// Relative import specifiers in `text`, resolved to src-relative paths against
+// `fromPath` (itself src-relative). An extensionless specifier is resolved
+// against `knownFiles` (.js/.jsx/.ts/.tsx, then /index.*) when a list is given.
+// Specifiers that escape src/ are dropped. De-duplicated and sorted.
+function parseImports(text, fromPath, knownFiles) {
+  const code = String(text || '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const known = new Set(Array.isArray(knownFiles) ? knownFiles : []);
+  const dir = path.posix.dirname(String(fromPath || ''));
+  const out = new Set();
+  function add(spec) {
+    if (!/^\.\.?\//.test(spec) || spec.indexOf('${') !== -1) return;
+    let resolved = path.posix.normalize(path.posix.join(dir, spec.split(/[?#]/)[0]));
+    if (resolved === '..' || resolved.indexOf('../') === 0) return;
+    if (!known.has(resolved) && known.size) {
+      const hit = ['.js', '.jsx', '.ts', '.tsx', '/index.js', '/index.jsx', '/index.ts', '/index.tsx']
+        .map(function (ext) { return resolved + ext; })
+        .find(function (cand) { return known.has(cand); });
+      if (hit) resolved = hit;
+    }
+    out.add(resolved);
+  }
+  let m;
+  IMPORT_FROM_RE.lastIndex = 0;
+  while ((m = IMPORT_FROM_RE.exec(code))) add(m[1]);
+  EXPORT_FROM_RE.lastIndex = 0;
+  while ((m = EXPORT_FROM_RE.exec(code))) add(m[1]);
+  DYNAMIC_IMPORT_RE.lastIndex = 0;
+  while ((m = DYNAMIC_IMPORT_RE.exec(code))) add(m[2]);
+  return Array.from(out).sort();
+}
+
+// First sentence of the file's leading `//` or `/* */` comment block, trimmed
+// to MODULE_PURPOSE_MAX chars, or null when the file opens with code.
+function extractPurpose(text) {
+  const lines = String(text || '').replace(/^﻿/, '').replace(/^#!.*\n/, '').split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  if (i >= lines.length) return null;
+  const parts = [];
+  if (/^\s*\/\//.test(lines[i])) {
+    for (; i < lines.length && /^\s*\/\//.test(lines[i]); i++) parts.push(lines[i].replace(/^\s*\/\/+/, ''));
+  } else if (/^\s*\/\*/.test(lines[i])) {
+    for (; i < lines.length; i++) {
+      const end = lines[i].indexOf('*/');
+      const body = end === -1 ? lines[i] : lines[i].slice(0, end);
+      parts.push(body.replace(/^\s*\/\*+/, '').replace(/^\s*\*+/, ''));
+      if (end !== -1) break;
+    }
+  } else {
+    return null;
+  }
+  const joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (!joined) return null;
+  const sentence = /^(.*?[.!?])(?=\s|$)/.exec(joined);
+  const first = sentence ? sentence[1] : joined;
+  return first.length > MODULE_PURPOSE_MAX ? first.slice(0, MODULE_PURPOSE_MAX).trimEnd() : first;
+}
+
+function countLines(text) {
+  const s = String(text || '');
+  if (!s) return 0;
+  const n = s.split(/\r?\n/).length;
+  return /\n$/.test(s) ? n - 1 : n;
+}
+
+// [{ path, lines, imports, purpose }] for every JS/JSX/TS/TSX source, sorted
+// by path. `sources` is the same { name, isJs, text } list the region scan uses.
+function buildModules(sources) {
+  const js = (Array.isArray(sources) ? sources : []).filter(function (s) { return s && isJsName(s.name); });
+  const names = js.map(function (s) { return s.name; });
+  return js.map(function (s) {
+    return { path: s.name, lines: countLines(s.text), imports: parseImports(s.text, s.name, names), purpose: extractPurpose(s.text) };
+  }).sort(function (a, b) { return a.path < b.path ? -1 : (a.path > b.path ? 1 : 0); });
+}
+
+// The committed code map's `areas` array, or undefined when the file is
+// absent or unreadable — the manifest then omits the key entirely.
+function readCodemapAreas(file) {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return undefined; }
+  return data && Array.isArray(data.areas) ? data.areas : undefined;
+}
+
+// Drift between the code map and the module list: JS files no area claims,
+// and area files that no longer exist. Warn-only; never fails the build.
+function codemapWarnings(modules, areas) {
+  if (!Array.isArray(areas)) return [];
+  const paths = (modules || []).map(function (m) { return m.path; });
+  const known = new Set(paths);
+  const assigned = new Set();
+  const missing = [];
+  areas.forEach(function (a) {
+    ((a && Array.isArray(a.files)) ? a.files : []).forEach(function (f) {
+      assigned.add(f);
+      if (!known.has(f)) missing.push((a.id || '?') + ': ' + f);
+    });
+  });
+  const unassigned = paths.filter(function (p) { return !assigned.has(p); });
+  const warnings = [];
+  if (unassigned.length) warnings.push('codemap.json: ' + unassigned.length + ' JS file(s) in no area — ' + unassigned.join(', '));
+  if (missing.length) warnings.push('codemap.json: ' + missing.length + ' area file(s) not found — ' + missing.join(', '));
+  return warnings;
+}
+
+function buildWebManifest(opts) {
+  const o = opts || {};
+  const root = o.srcDir || srcDir;
+  const codemapPath = o.codemapPath || path.resolve(root, '..', 'codemap.json');
   let files = [], sources = [];
   try {
-    const rel = function (p) { return path.relative(srcDir, p).split(path.sep).join('/'); };
-    const names = walkWeb(srcDir).map(rel);
+    const rel = function (p) { return path.relative(root, p).split(path.sep).join('/'); };
+    const names = walkWeb(root).map(rel);
     files = names.filter(function (f) { return FILE_RE.test(f); }).sort();
     sources = names.filter(function (f) { return SCAN_RE.test(f); }).map(function (f) {
-      return { name: f, isJs: isJsName(f), text: fs.readFileSync(path.join(srcDir, f), 'utf8') };
+      return { name: f, isJs: isJsName(f), text: fs.readFileSync(path.join(root, f), 'utf8') };
     });
   } catch (e) { files = []; sources = []; }
   const regions = scanRegions(sources);
   const hasDom = files.some(function (f) { return /\.(?:jsx?|tsx?|css|html?)$/i.test(f); });
-  return { files: files, srcRoot: resolveSrcRoot(), regions: regions, hasDom: hasDom, lens: 'ui' };
+  const modules = buildModules(sources);
+  const areas = readCodemapAreas(codemapPath);
+  const warn = o.warn || console.warn;
+  codemapWarnings(modules, areas).forEach(function (w) { warn('Warning: ' + w); });
+  const manifest = { files: files, srcRoot: resolveSrcRoot(), regions: regions, hasDom: hasDom, lens: 'ui', modules: modules };
+  if (areas) manifest.areas = areas;
+  return manifest;
 }
 
 // ── csharp mode: recursive .cs inventory, repo-root-relative paths ──
@@ -536,7 +661,7 @@ function buildManifest() {
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
+module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
 
 if (require.main === module) {
   const manifest = buildManifest();
@@ -547,6 +672,8 @@ if (require.main === module) {
     manifest.files.length, 'files,',
     manifest.regions.length, 'regions,',
     (manifest.types ? manifest.types.length : 0), 'types,',
-    (manifest.tables ? manifest.tables.length : 0), 'tables, hasDom=' + manifest.hasDom + ', lens=' + manifest.lens
+    (manifest.tables ? manifest.tables.length : 0), 'tables,',
+    (manifest.modules ? manifest.modules.length : 0), 'modules,',
+    (manifest.areas ? manifest.areas.length : 0), 'areas, hasDom=' + manifest.hasDom + ', lens=' + manifest.lens
   );
 }
