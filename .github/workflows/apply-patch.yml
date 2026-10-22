@@ -1,0 +1,122 @@
+name: Apply patch
+
+# Applies every *.patch file dropped into patches/inbox/ and commits the result
+# to main, so a change can land from the GitHub app with one file upload — no
+# Codespace, no local git. Each patch becomes its own commit; the patch file
+# itself moves to patches/applied/ in that same commit, so the inbox is the
+# queue and applied/ is the ledger.
+#
+# Bootstrap (once per repo): upload this file to .github/workflows/, then open
+# Actions → "Apply patch" → Run workflow. That first run creates patches/inbox/
+# and patches/applied/ and exits. From then on, uploading a patch into
+# patches/inbox/ triggers it.
+#
+# Token: pushes made with the default GITHUB_TOKEN cannot create or modify
+# workflow files and do not trigger other workflows. A PAT in PATCH_PAT (or
+# the existing ONBOARD_PAT, which already has those scopes) lifts both limits;
+# with neither, the job still works for patches that touch no workflow file,
+# and the explicit dispatch at the end covers the one downstream workflow that
+# matters here (deploy-worker.yml, when the repo has it).
+#
+# A patch that does not apply cleanly fails the job and stays in the inbox —
+# nothing is half-applied, because `git apply --index` is all-or-nothing per
+# patch. The error is in the job summary.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "patches/inbox/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: apply-patch
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.PATCH_PAT || secrets.ONBOARD_PAT || github.token }}
+          persist-credentials: true
+
+      - name: Apply queued patches
+        id: apply
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ ! -d patches/inbox ] || [ ! -d patches/applied ]; then
+            mkdir -p patches/inbox patches/applied
+            touch patches/inbox/.gitkeep patches/applied/.gitkeep
+            git add patches/inbox/.gitkeep patches/applied/.gitkeep
+            git commit -m "Set up patch inbox"
+            git push
+            echo "Created patches/inbox/ and patches/applied/. Drop a .patch file in the inbox to apply it." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "applied=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          shopt -s nullglob
+          queue=(patches/inbox/*.patch patches/inbox/*.diff)
+          if [ ${#queue[@]} -eq 0 ]; then
+            echo "Inbox empty — nothing to apply." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "applied=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Oldest first by name, so numbered patches (01-…, 02-…) apply in order.
+          IFS=$'\n' queue=($(printf '%s\n' "${queue[@]}" | sort)); unset IFS
+          n=0
+          for p in "${queue[@]}"; do
+            name="$(basename "$p")"
+            echo "::group::$name"
+            if ! git apply --check --whitespace=nowarn "$p" 2> apply.err; then
+              {
+                echo "### ❌ $name did not apply"
+                echo '```'
+                cat apply.err
+                echo '```'
+                echo "Left in patches/inbox/. Fix the patch (or the tree) and re-upload."
+              } >> "$GITHUB_STEP_SUMMARY"
+              cat apply.err
+              echo "::endgroup::"
+              exit 1
+            fi
+            git apply --index --whitespace=nowarn "$p"
+            # Plain mv + add rather than git mv: an uploaded patch is tracked,
+            # but a dispatch run against an untracked one must not fail here.
+            mv "$p" "patches/applied/$name"
+            git add -A patches/inbox patches/applied
+            git commit -m "Apply patch: ${name%.*}"
+            n=$((n+1))
+            {
+              echo "### ✅ $name"
+              echo '```'
+              git show --stat --format= HEAD
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::endgroup::"
+          done
+          rm -f apply.err
+          git push
+          echo "applied=$n" >> "$GITHUB_OUTPUT"
+
+      # The commits above were pushed by a token; if it was the default
+      # GITHUB_TOKEN, downstream push-triggered workflows stayed silent. The one
+      # that must not stay silent is the Worker deploy (the commit IS the
+      # deploy there), so fire it explicitly when the repo has it. A no-op
+      # everywhere else.
+      - name: Dispatch deploy-worker.yml if present
+        if: steps.apply.outputs.applied != '0' && hashFiles('.github/workflows/deploy-worker.yml') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run deploy-worker.yml --ref main
