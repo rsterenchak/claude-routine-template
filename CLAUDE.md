@@ -247,6 +247,13 @@ Entries in `TODO.md` follow a strict format because an automated parser reads th
 - Exception: single-sentence display strings stay real and meaningful — labels,
   buttons, headings, nav items, alt text, error messages, form hints, table
   headers.
+- Exception: `codetour.json` and `codebook.json` are authored explanations of
+  this codebase — tour step `why` text, recap cards and chapter paragraphs are
+  real prose that describes the real code, never lorem ipsum. They are read in
+  the Structure and Understanding tabs, and a placeholder there is a bug. Every
+  backticked name in them must resolve: `scripts/gen-src-manifest.js` validates
+  them on each run and flags a chapter stale when one stops resolving, so when a
+  change renames or moves code they anchor to, update them in the same PR.
 - On coursework repos: lorem ipsum is a build-time convention only. Real content
   must be swapped in before submission — evaluators grade the copy. Treat the
   swap as a mandatory pre-submission step.
