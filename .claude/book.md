@@ -17,8 +17,9 @@ viewer; the book points at them, it does not replace them.
 - `WORKING_DIR` — the project folder (`{{WORKING_DIR}}` on this repo). Run every
   command below from inside it. `codebook.json`, `codemap.json` and
   `codetour.json` sit there, beside `scripts/`.
-- `MANIFEST_VARIANT` — the generator file name (`{{MANIFEST_VARIANT}}`). Run it
-  as `node scripts/$MANIFEST_VARIANT`.
+- `MANIFEST_VARIANT` — the generator file name, resolved by the workflow from
+  what is in `scripts/` (`gen-src-manifest.js` or `.cjs`). Run it as
+  `node scripts/$MANIFEST_VARIANT`.
 - `BOOK_SCOPE` — `stale` or `all`. See "Scope" below.
 
 ## Inputs — read these first, in this order

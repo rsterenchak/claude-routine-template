@@ -780,6 +780,14 @@ wf_backfill_pairs() {
   printf 'MANIFEST_VARIANT=%s\n'  "${MANIFEST_VARIANT:-}"
   printf 'MANIFEST_SRC_ROOT=%s\n' "${sp%/}"
   printf 'DOTNET_VERSION=%s\n'    "${ONBOARD_DOTNET:-10.0.x}"
+  # Mirrors MANIFEST_LANG_VAL in section 4b: without it the preflight rendered
+  # claude-book.yml with {{MANIFEST_LANG}} unfilled and reported a freshly
+  # created, correct file as "has local edits — hand merge".
+  case "$SHAPE" in
+    console|desktop|maui) printf 'MANIFEST_LANG=csharp\n' ;;
+    sql)                  printf 'MANIFEST_LANG=sql\n' ;;
+    *)                    printf 'MANIFEST_LANG=\n' ;;
+  esac
   case "$SHAPE" in
     console|desktop|maui)
       printf 'INSTALL_COMMAND=dotnet restore\nTEST_COMMAND=dotnet test\nBUILD_COMMAND=dotnet build\n' ;;

@@ -68,6 +68,26 @@ jobs:
           elif [ -f package.json ]; then npm install || true
           fi
 
+      # Resolve the generator file. {{MANIFEST_VARIANT}} is filled on the web
+      # shapes (gen-src-manifest.js / .cjs) but onboard.sh writes a "(none — …)"
+      # note on the .NET shapes, which only deploy.yml ever read — so the first
+      # .NET book run tried to execute `node scripts/(none — desktop project)`.
+      # Go by what is actually in scripts/ and export the basename for the
+      # agent step and the gate; fail loudly if neither variant exists.
+      - name: Resolve generator
+        working-directory: {{WORKING_DIR}}
+        run: |
+          gen=""
+          for cand in "{{MANIFEST_VARIANT}}" gen-src-manifest.js gen-src-manifest.cjs; do
+            if [ -n "$cand" ] && [ -f "scripts/$cand" ]; then gen="$cand"; break; fi
+          done
+          if [ -z "$gen" ]; then
+            echo "No scripts/gen-src-manifest.js or .cjs in $(pwd) — the book pass needs the manifest generator."
+            exit 1
+          fi
+          echo "MANIFEST_VARIANT=$gen" >> "$GITHUB_ENV"
+          echo "Generator: scripts/$gen"
+
       # Resolve model routing. Identical to claude-derive.yml: claude-* ids
       # (and no pick) stay on plan via OAuth; anything else reroutes every
       # Claude Code call through the Worker's /anthropic gateway.
@@ -111,7 +131,7 @@ jobs:
         env:
           BOOK_SCOPE: ${{ inputs.scope || 'stale' }}
           WORKING_DIR: {{WORKING_DIR}}
-          MANIFEST_VARIANT: {{MANIFEST_VARIANT}}
+          # MANIFEST_VARIANT comes from the Resolve generator step (GITHUB_ENV).
           # Empty on web repos (the generator's default mode); 'csharp' on the
           # .NET shapes so the routine's own generator runs and the gate below
           # build the same index manifest.yml publishes.
@@ -161,7 +181,7 @@ jobs:
             echo "No codebook.json after the pass — nothing to commit."
             exit 0
           fi
-          node scripts/{{MANIFEST_VARIANT}} > gen.out 2> gen.err || { cat gen.err; exit 1; }
+          node "scripts/$MANIFEST_VARIANT" > gen.out 2> gen.err || { cat gen.err; exit 1; }
           cat gen.out
           if grep -q 'Warning: codebook.json' gen.err; then
             echo "codebook.json produced warnings — refusing to commit:"
