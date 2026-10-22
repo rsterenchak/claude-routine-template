@@ -1,0 +1,423 @@
+diff --git a/.claude/book.md b/.claude/book.md
+new file mode 100644
+index 0000000..cb528b0
+--- /dev/null
++++ b/.claude/book.md
+@@ -0,0 +1,191 @@
++# Book routine
++
++You are the BOOK stage of Robert's autonomous agent for this repo. Your job:
++write or refresh `codebook.json` — the codebase told as an ordered book of
++chapters that a newcomer can read front-to-back once and come away knowing how
++the pieces connect. The app's Understanding tab renders it. You do NOT change
++source code, tests, tours, the code map, or any file other than `codebook.json`,
++and you do NOT commit or push — the workflow validates and commits after you.
++
++The book is orientation, not reference. A reader finishes it knowing what the
++areas are, what the main flows are, which file to open for what, and where the
++seams between areas sit. Detail lives in the tours (step-through) and the code
++viewer; the book points at them, it does not replace them.
++
++## Environment
++
++- `WORKING_DIR` — the project folder (`{{WORKING_DIR}}` on this repo). Run every
++  command below from inside it. `codebook.json`, `codemap.json` and
++  `codetour.json` sit there, beside `scripts/`.
++- `MANIFEST_VARIANT` — the generator file name (`{{MANIFEST_VARIANT}}`). Run it
++  as `node scripts/$MANIFEST_VARIANT`.
++- `BOOK_SCOPE` — `stale` or `all`. See "Scope" below.
++
++## Inputs — read these first, in this order
++
++1. `CLAUDE.md` at the repo root — the "Key files" section and the project's
++   stack. This is the project's own account of what matters; the book must
++   agree with it.
++2. `codemap.json` — `areas: [{ id, name, purpose, files }]`. The areas are the
++   book's vocabulary: chapters map onto areas (one chapter per area, or one
++   area split across two chapters when it is large). Use their `name` and
++   `purpose` as given; do not rename an area.
++3. `codetour.json` — `sections` and `tours`. The sections are already ordered
++   the way the tours are meant to be taken, and that order is the book's
++   default reading order. Each tour's `title`, `recap` and step `why` texts are
++   grounded explanations of real flows: a chapter summarises what its tours
++   walk through and names them in `tours` so the reader can step in.
++4. The compiled manifest, which carries the import graph. Generate it into a
++   scratch directory (never into the working tree):
++   `MANIFEST_OUT_DIR=/tmp/book-in MANIFEST_DETERMINISTIC=true node scripts/$MANIFEST_VARIANT`
++   then read `/tmp/book-in/src-manifest.json` → `modules: [{ path, lines,
++   imports, purpose }]` and `/tmp/book-in/src-symbols.json` → `files: { path:
++   { defs: [{ name, kind, start, end, parent }], imports } }`. `defs` is the
++   complete list of names a reference may resolve to.
++5. The existing `codebook.json`, when there is one — the chapters you keep
++   byte-for-byte under `stale` scope, and the voice to match under `all`.
++6. The source files themselves, as you write each chapter. Every sentence
++   about behaviour must come from reading the code it describes, not from the
++   file name or a tour's wording.
++
++## Schema — `codebook.json`
++
++```json
++{
++  "version": 1,
++  "title": "Understanding <project name>",
++  "chapters": [
++    {
++      "id": "app-starts",
++      "title": "How the app starts and updates itself",
++      "area": "shell",
++      "files": ["index.js", "main.js", "sw.js"],
++      "tours": ["app-starts", "app-updates"],
++      "ahead": { "chapter": "data", "note": "Where the cloud copy comes from is the next chapter." },
++      "body": [
++        "Everything begins in `index.js`. Its top-level code runs once …",
++        "…"
++      ]
++    }
++  ]
++}
++```
++
++- `id` — short kebab-case, unique, stable across regenerations (a chapter that
++  keeps its id keeps the reader's bookmarks and progress).
++- `title` — ≤ 60 characters, plain language, not a file name.
++- `area` — a `codemap.json` area id, or `null` for a chapter that spans areas.
++- `files` — bare names relative to the source root, exactly as `codetour.json`
++  spells them (`main.js`, not `src/main.js`). 3–9 files; these are what the
++  chapter is about and what chapter-scoped chat attaches. Every name must exist
++  in the symbols index.
++- `tours` — ids from `codetour.json` whose flows this chapter summarises. May be
++  empty. Every id must exist.
++- `ahead` — optional. A forward reference to a later chapter, used when this
++  chapter has to mention something that chapter explains. `chapter` must be a
++  later chapter's id; `note` is one sentence telling the reader what to expect
++  there. Never point backwards.
++- `body` — 3–8 paragraph strings, each ≤ ~90 words. Plain prose. No headings,
++  no bullet markup, no code blocks.
++
++### References
++
++A backticked span inside a paragraph is a reference the generator resolves into
++a tappable chip:
++
++- `` `name` `` — a definition named `name`, looked up in the chapter's `files`
++  first, then across the whole index. Use the bare identifier exactly as it is
++  declared: `bootApp`, never `bootApp()` — a span with parentheses, spaces or
++  punctuation matches nothing and silently stays plain text, so the chip is
++  lost without any warning.
++- `` `file.js:name` `` — the same, pinned to one file. Use it whenever a name is
++  declared in more than one file, or the generator warns that it is ambiguous.
++- `` `Parent.name` `` — a member under a parent definition (a method on a class
++  or object literal).
++- `` `file.js` `` — a file reference; must be in the symbols index.
++
++A span that names nothing stays plain text with no warning — so a backticked
++word that is NOT meant as a reference (a CSS class, a localStorage key, a
++table name) is harmless. A span that LOOKS like a file or identifier and does
++not resolve is a warning and marks the chapter stale, and the workflow refuses
++to commit stale chapters. Prefer fewer, correct references over many.
++
++## Chapter order
++
++The book is read top-down, following execution, not bottom-up by dependency:
++
++1. Chapter 1 is always how the app starts — the entry point and what it builds
++   first. Readers are most lost here and every other chapter hangs off it.
++2. Then the main flows in the order a user meets them, which is the order
++   `codetour.json`'s sections already give. Keep that order unless the import
++   graph contradicts it: a chapter should not depend on a later chapter for
++   its vocabulary, except through an `ahead` note.
++3. Shared utilities and anything with high fan-in (many importers, few
++   imports) come last — readers need to know they exist, not understand them
++   before the app.
++4. 8–12 chapters. Below 8 the areas are being crushed together; above 12 the
++   read stops being one sitting.
++
++Use `modules[].imports` to check: for each chapter, list the files its `files`
++import; if most of them belong to a chapter that comes later, either move the
++chapter or add an `ahead` note naming the later chapter and the one thing the
++reader needs to accept for now.
++
++## Writing a chapter
++
++Audience: a competent developer who has never opened this repo. Voice: second
++person is fine ("when you type a title…"), present tense, concrete. Each
++paragraph makes one point and is grounded in a file in `files`:
++
++- Open with what the chapter's area is for and which file is its front door.
++- Describe the main flow end to end — who calls whom — naming the functions
++  that carry it as references. Say what a function is responsible for, not
++  what its lines do; the tour and the code viewer do the line level.
++- Name the seams: where this area hands off to another (that is where an
++  `ahead` note or a back-reference to an earlier chapter goes).
++- Point out the one or two non-obvious rules a newcomer would get wrong
++  (ownership of mutations, what never writes to the server, what runs once).
++- Close with which tours go deeper, if any — one sentence, naming them.
++
++Do not: list files, restate a tour step by step, describe CSS, invent behaviour
++the code does not show, mention AI, agents, Claude, or that the book was
++generated, or use placeholder text of any kind — `codebook.json` is real prose
++by design (see CLAUDE.md, "Placeholder text").
++
++## Scope
++
++- `stale` (default): run the generator into `/tmp/book-in` and read
++  `/tmp/book-in/src-book.json`. Rewrite ONLY chapters whose `stale` is `true`,
++  fixing exactly what their `warnings` name (a renamed symbol, a moved file, a
++  dropped tour) and re-reading that code so the prose is still true. Every
++  other chapter must come out byte-for-byte identical — do not touch its text,
++  its order, or its id. If nothing is stale, change nothing and say so.
++  If there is no `codebook.json` at all, `stale` behaves as `all`.
++- `all`: rewrite the whole book from the inputs above. Keep existing chapter
++  ids where the chapter's subject is the same, so bookmarks survive.
++
++## Validate before you finish
++
++Run the generator into a scratch directory and read its stderr:
++
++    MANIFEST_OUT_DIR=/tmp/book-out MANIFEST_DETERMINISTIC=true node scripts/$MANIFEST_VARIANT 2>/tmp/book-out.err
++    grep 'Warning: codebook.json' /tmp/book-out.err
++
++Every warning names a chapter and the reference, file, tour or `ahead` that
++failed. Fix the prose or the reference and run again until there are no
++codebook warnings and the `src-book.json written` line reports `0 stale`. If
++`tests/genSrcManifest.test.js` exists and `node_modules` is installed, also run
++`npx vitest run tests/genSrcManifest.test.js` and make it pass — it asserts the
++committed book's order, sizes and resolution. Never edit the generator or the
++tests to make the book pass.
++
++Leave `codebook.json` as the only changed file in the working tree. Delete
++nothing; write nothing under `/tmp` into the repo.
++
++## Summary
++
++End with one paragraph: the scope you ran, how many chapters you wrote or
++rewrote and how many you left untouched, the chapter order as a list of
++titles, the reference count and stale count from the generator's final run,
++and anything you could not describe accurately because the code was ambiguous
++(so Robert can fix the source or the map rather than the book).
+diff --git a/.github/workflows/claude-book.yml b/.github/workflows/claude-book.yml
+new file mode 100644
+index 0000000..4a68691
+--- /dev/null
++++ b/.github/workflows/claude-book.yml
+@@ -0,0 +1,194 @@
++name: Claude book
++
++# The code-book pass: writes or refreshes `codebook.json` — the codebase told
++# as ordered chapters the Understanding tab renders — and commits it to main.
++# Sibling of claude-derive.yml (same dispatch, same model routing, same
++# plan-billed OAuth); it differs in that it WRITES the repo, which is why
++# permissions carry contents:write and why the commit step below, not the
++# agent, does the push.
++#
++# correlation_id is echoed into run-name so the app/Worker can find this run by
++# name (workflow_dispatch returns no run id — same trick as claude-run.yml).
++# scope decides how much gets rewritten: `stale` (the default) regenerates only
++# chapters the generator flags stale and leaves the rest byte-for-byte; `all`
++# rewrites the book — the first run on a repo with no codebook.json, or an
++# explicit "regenerate everything".
++run-name: Claude book ${{ inputs.correlation_id }} · ${{ inputs.scope || 'stale' }} · ${{ inputs.model || 'default' }}
++
++on:
++  workflow_dispatch:
++    inputs:
++      scope:
++        description: stale (default) regenerates only stale chapters; all rewrites the whole book
++        type: choice
++        options: [stale, all]
++        default: stale
++        required: false
++      correlation_id:
++        description: opaque id echoed into run-name for status polling
++        type: string
++        required: false
++      model:
++        description: resolved model id (empty = workflow default); non-claude-* ids reroute via the Worker gateway
++        type: string
++        required: false
++
++permissions:
++  contents: write     # the book pass commits codebook.json back to main
++  id-token: write     # required: the action authenticates via OIDC
++
++concurrency:
++  # one book pass at a time; a second dispatch queues rather than overlapping
++  # (two concurrent passes would race on the same codebook.json commit).
++  group: claude-book
++  cancel-in-progress: false
++
++jobs:
++  book:
++    runs-on: ubuntu-latest
++    timeout-minutes: 40
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          # shallow is enough — the pass reads current source, no history needed
++          fetch-depth: 1
++
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '20'
++
++      # The agent runs the generator to validate its own references, and the
++      # gate step below runs it again. Both need the project's dependencies
++      # only when the repo's tests are part of the check — the generator itself
++      # is dependency-free. Install is best-effort for that reason.
++      - name: Install dependencies (best effort)
++        working-directory: {{WORKING_DIR}}
++        run: |
++          if [ -f package-lock.json ]; then npm ci || npm install || true
++          elif [ -f package.json ]; then npm install || true
++          fi
++
++      # Resolve model routing. Identical to claude-derive.yml: claude-* ids
++      # (and no pick) stay on plan via OAuth; anything else reroutes every
++      # Claude Code call through the Worker's /anthropic gateway.
++      - name: Resolve model routing
++        env:
++          MODEL: ${{ inputs.model }}
++          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
++          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
++        run: |
++          case "$MODEL" in
++            claude-*|"")
++              if [ -z "$MODEL" ]; then
++                echo "No model input — workflow default applies (plan lane)."
++              else
++                echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
++              fi
++              ;;
++            *)
++              if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
++                echo "Third-party model '$MODEL' requested but TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing — cannot route. Failing loudly instead of billing the wrong lane."
++                exit 1
++              fi
++              {
++                echo "ANTHROPIC_BASE_URL=${INJECTOR_URL%/}/anthropic"
++                echo "ANTHROPIC_AUTH_TOKEN=$INJECTOR_SECRET"
++                echo "ANTHROPIC_MODEL=$MODEL"
++                echo "ANTHROPIC_SMALL_FAST_MODEL=$MODEL"
++                echo "ANTHROPIC_DEFAULT_OPUS_MODEL=$MODEL"
++                echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$MODEL"
++                echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$MODEL"
++                echo "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
++                echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
++                echo "API_TIMEOUT_MS=600000"
++                echo "ANTHROPIC_CUSTOM_HEADERS=X-Void-Attr: repo=${GITHUB_REPOSITORY}; corr=${{ inputs.correlation_id }}"
++              } >> "$GITHUB_ENV"
++              echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
++              ;;
++          esac
++
++      - uses: anthropics/claude-code-action@v1
++        env:
++          BOOK_SCOPE: ${{ inputs.scope || 'stale' }}
++          WORKING_DIR: {{WORKING_DIR}}
++          MANIFEST_VARIANT: {{MANIFEST_VARIANT}}
++        with:
++          # Subscription auth (Pro/Max) — the SAME plan-billed path as
++          # claude-run.yml / claude-derive.yml, NOT anthropic_api_key.
++          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
++          # Opus, like derive: the pass runs rarely and its whole value is the
++          # quality of the explanation — choosing what to say about an area and
++          # what to leave out is where the stronger model earns its keep.
++          # --dangerously-skip-permissions: no human to approve the routine's
++          # generator runs; the agent never pushes (the step below does), so an
++          # errant action can at most dirty the ephemeral runner.
++          claude_args: "--max-turns 80 --model ${{ inputs.model || 'claude-opus-5-5' }} --dangerously-skip-permissions"
++          show_full_output: true
++          prompt: |
++            You are running the autonomous-agent BOOK pass for this repository.
++            Scope: ${{ inputs.scope || 'stale' }}
++
++            Read `.claude/book.md` and execute it exactly as written. It defines
++            what the code book is, the exact `codebook.json` schema the
++            generator compiles, how to decide chapter order, what the `stale`
++            and `all` scopes mean, and how to validate every reference with the
++            generator before you finish.
++
++            Do NOT commit or push. Leave the updated `codebook.json` in the
++            working tree; the workflow's next step validates and commits it.
++
++            Complete the whole pass, then exit with the one-paragraph summary
++            the routine specifies.
++
++      # The gate: the committed book must compile clean. Run the generator into
++      # a scratch directory and refuse to commit a codebook.json that produces
++      # any stale chapter or any codebook warning — a chapter that lies about
++      # the code is worse than the previous one.
++      - name: Validate codebook.json
++        working-directory: {{WORKING_DIR}}
++        env:
++          MANIFEST_OUT_DIR: ${{ runner.temp }}/book-check
++          MANIFEST_DETERMINISTIC: 'true'
++        run: |
++          if [ ! -f codebook.json ]; then
++            echo "No codebook.json after the pass — nothing to commit."
++            exit 0
++          fi
++          node scripts/{{MANIFEST_VARIANT}} > gen.out 2> gen.err || { cat gen.err; exit 1; }
++          cat gen.out
++          if grep -q 'Warning: codebook.json' gen.err; then
++            echo "codebook.json produced warnings — refusing to commit:"
++            grep 'Warning: codebook.json' gen.err
++            exit 1
++          fi
++          if ! grep -q 'src-book.json written' gen.out; then
++            echo "Generator wrote no src-book.json — refusing to commit."
++            exit 1
++          fi
++          if ! grep 'src-book.json written' gen.out | grep -q ' 0 stale'; then
++            echo "src-book.json has stale chapters — refusing to commit."
++            exit 1
++          fi
++          # The repo's own generator tests, when it has them (Void does). A
++          # repo without them skips this silently.
++          if [ -f tests/genSrcManifest.test.js ] && [ -d node_modules ]; then
++            npx vitest run tests/genSrcManifest.test.js
++          fi
++          rm -f gen.out gen.err
++
++      # Commit the book. No [skip ci]: deploy.yml / manifest.yml must run so the
++      # published src-book.json picks up the new chapters. paths-ignore in those
++      # workflows covers the GENERATED files, not codebook.json, so this commit
++      # triggers exactly one republish.
++      - name: Commit codebook.json if it changed
++        working-directory: {{WORKING_DIR}}
++        run: |
++          if [ ! -f codebook.json ] || [ -z "$(git status --porcelain codebook.json)" ]; then
++            echo "codebook.json unchanged — nothing to commit."
++            exit 0
++          fi
++          git config user.name "github-actions[bot]"
++          git config user.email "github-actions[bot]@users.noreply.github.com"
++          git add codebook.json
++          git commit -m "Update code book (${{ inputs.scope || 'stale' }})"
++          git push
+diff --git a/onboard.sh b/onboard.sh
+index 02e869a..032a68e 100755
+--- a/onboard.sh
++++ b/onboard.sh
+@@ -71,6 +71,11 @@ NODE_FILES=(
+   "scripts/render-check.mjs"
+   ".github/workflows/claude-complexity-scan.yml"
+   ".github/workflows/claude-scan.yml"
++  # The code-book pass (web shapes only — it needs the symbols index the web
++  # generator writes): the routine the agent executes and the workflow that
++  # dispatches it, validates codebook.json with the generator, and commits it.
++  ".claude/book.md"
++  ".github/workflows/claude-book.yml"
+ )
+ # Shape-specific files.
+ #   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
+@@ -1318,7 +1323,9 @@ PLACEHOLDER_FILES=(
+   ".claude/triage.md"
+   ".claude/derive.md"
+   ".claude/project-derive.md"
++  ".claude/book.md"
+   ".github/workflows/test.yml"
++  ".github/workflows/claude-book.yml"
+ )
+ # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
+ # {{BUILD_COMMAND}}, {{MANIFEST_VARIANT}}, {{DOTNET_VERSION}}, etc.) get filled.
