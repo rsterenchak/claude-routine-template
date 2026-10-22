@@ -638,6 +638,18 @@ function readJsonFile(file) {
 // top-level code no named definition wraps (`parent` is ignored).
 const TOUR_FILE_SYMBOL = '@file';
 
+// Defs sharing one `parent` are overloads of one member (C# only — JS has
+// none): the first in source order, or null when the parents differ.
+function firstOverload(defs) {
+  const parent = defs[0].parent === undefined ? null : defs[0].parent;
+  let first = defs[0];
+  for (let k = 1; k < defs.length; k++) {
+    if ((defs[k].parent === undefined ? null : defs[k].parent) !== parent) return null;
+    if (defs[k].start < first.start) first = defs[k];
+  }
+  return first;
+}
+
 // { line, lines } for a step, or { error } naming why it didn't resolve.
 // `lines` are the 1-based matched lines, ascending.
 function resolveTourStep(step, symbols, fileLines) {
@@ -653,8 +665,8 @@ function resolveTourStep(step, symbols, fileLines) {
       return d.name === step.symbol && (!hasParent || d.parent === step.parent);
     });
     if (!defs.length) return { error: 'symbol not found' };
-    if (defs.length > 1) return { error: 'symbol is ambiguous (' + defs.length + ' defs) — add a parent' };
-    def = defs[0];
+    def = firstOverload(defs);
+    if (!def) return { error: 'symbol is ambiguous (' + defs.length + ' defs) — add a parent' };
   }
   const match = Array.isArray(step.match) ? step.match : [];
   if (!match.length) return { error: 'no match strings' };
@@ -816,6 +828,13 @@ function bookDefsIn(symbols, files, name, parent) {
   return out;
 }
 
+// firstOverload over bookDefsIn hits, which must also share one file.
+function firstOverloadHit(hits) {
+  for (let k = 1; k < hits.length; k++) if (hits[k].file !== hits[0].file) return null;
+  const def = firstOverload(hits.map(function (h) { return h.def; }));
+  return def ? { file: hits[0].file, def: def } : null;
+}
+
 // { ref } for a resolved span, { error } for a broken one, or {} for a span
 // that names nothing and stays plain text.
 function resolveBookRef(span, chapterFiles, symbols) {
@@ -836,16 +855,19 @@ function resolveBookRef(span, chapterFiles, symbols) {
     if (!nm) return {};
     const hits = bookDefsIn(symbols, [file], nm[2], nm[1] || null);
     if (!hits.length) return { error: '"' + span + '" names no definition in ' + file };
-    if (hits.length > 1) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs in ' + file + ')' };
-    return toRef(hits[0]);
+    const hit = firstOverloadHit(hits);
+    if (!hit) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs in ' + file + ')' };
+    return toRef(hit);
   }
   const nm = BOOK_NAME_RE.exec(span);
   if (!nm) return {};
   const parent = nm[1] || null;
   let hits = bookDefsIn(symbols, chapterFiles, nm[2], parent);
   if (!hits.length) hits = bookDefsIn(symbols, known, nm[2], parent);
-  if (hits.length > 1) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs) — pin it as `file.js:' + span + '`' };
-  return hits.length ? toRef(hits[0]) : {};
+  if (!hits.length) return {};
+  const hit = firstOverloadHit(hits);
+  if (!hit) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs) — pin it as `file.js:' + span + '`' };
+  return toRef(hit);
 }
 
 // A paragraph as segments: { t } runs of text and { ref } chips. A span that
@@ -996,7 +1018,11 @@ function walkCs(start) {
 // (offset-preserving) to cut false positives, but heavy/nested generics,
 // indexers/operators, and members that follow a NESTED type may be approximate
 // (members are attached to the nearest preceding type by source position).
-const CS_KW_NAME = { 'if':1,'for':1,'foreach':1,'while':1,'switch':1,'using':1,'lock':1,'catch':1,'fixed':1,'return':1,'throw':1,'yield':1,'await':1,'new':1,'sizeof':1,'typeof':1,'nameof':1,'default':1,'checked':1,'unchecked':1,'when':1,'do':1,'else':1,'in':1,'is':1,'as':1,'get':1,'set':1,'init':1,'add':1,'remove':1,'where':1,'select':1,'from':1 };
+const CS_KW_NAME = { 'if':1,'for':1,'foreach':1,'while':1,'switch':1,'using':1,'lock':1,'catch':1,'fixed':1,'return':1,'throw':1,'yield':1,'await':1,'new':1,'sizeof':1,'typeof':1,'nameof':1,'default':1,'checked':1,'unchecked':1,'when':1,'do':1,'else':1,'in':1,'is':1,'as':1,'where':1,'select':1,'from':1 };
+// Accessor keywords: legal method names (CS_METHOD_RE needs a return type and
+// parameter list, which accessors never have), but `protected set => …` would
+// read as a property named `set`, so the property pass still skips them.
+const CS_ACCESSOR_KW = { 'get':1,'set':1,'init':1,'add':1,'remove':1 };
 const CS_RT_STMT  = { 'return':1,'throw':1,'yield':1,'await':1,'case':1,'goto':1,'else':1,'do':1,'new':1,'in':1 };
 const CS_TYPE_KW  = { 'class':1,'interface':1,'struct':1,'enum':1,'record':1,'namespace':1 };
 const CS_MAX_TYPES_PER_FILE = 40;
@@ -1146,7 +1172,7 @@ function scanCsharpTypes(rawSrc, relPath) {
   CS_PROP_RE.lastIndex = 0;
   while ((m = CS_PROP_RE.exec(src)) !== null) {
     const name = m[2];
-    if (CS_KW_NAME[name]) continue;
+    if (CS_KW_NAME[name] || CS_ACCESSOR_KW[name]) continue;
     const type = csClean(m[1]);
     const tLast = type.split(' ').pop();
     if (!type || CS_TYPE_KW[tLast] || CS_RT_STMT[tLast]) continue;
