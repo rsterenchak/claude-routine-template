@@ -7,7 +7,8 @@ name: Update source manifest
 # Such repos have no dist/ to publish; the source files ARE the served files.
 #
 # This workflow regenerates src-manifest.json (plus src-symbols.json and, when
-# codetour.json exists, src-tours.json) at the repo ROOT (where Pages serves
+# codetour.json / codebook.json exist, src-tours.json / src-book.json) at the
+# repo ROOT (where Pages serves
 # them) and commits them back to main, but only when they changed.
 # The generator runs in deterministic mode (no volatile timestamp/sha) so an
 # unchanged file list produces an identical manifest and no commit.
@@ -28,6 +29,7 @@ on:
       - 'src-manifest.json'
       - 'src-symbols.json'
       - 'src-tours.json'
+      - 'src-book.json'
 
 permissions:
   contents: write
@@ -49,12 +51,13 @@ jobs:
           MANIFEST_DETERMINISTIC: 'true'
 
       # The generator also writes src-symbols.json (definitions index for code
-      # tracing) and, when codetour.json exists, src-tours.json. Both are served
+      # tracing), when codetour.json exists, src-tours.json, and when codebook.json
+      # exists, src-book.json. All are served
       # from the repo root beside the manifest, so commit whichever changed.
       - name: Commit manifest outputs if they changed
         run: |
           files=""
-          for f in src-manifest.json src-symbols.json src-tours.json; do
+          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
             if [[ -f "$f" && -n "$(git status --porcelain "$f")" ]]; then
               files="$files $f"
             fi
