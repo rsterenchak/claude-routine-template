@@ -112,6 +112,11 @@ jobs:
           BOOK_SCOPE: ${{ inputs.scope || 'stale' }}
           WORKING_DIR: {{WORKING_DIR}}
           MANIFEST_VARIANT: {{MANIFEST_VARIANT}}
+          # Empty on web repos (the generator's default mode); 'csharp' on the
+          # .NET shapes so the routine's own generator runs and the gate below
+          # build the same index manifest.yml publishes.
+          MANIFEST_LANG: '{{MANIFEST_LANG}}'
+          MANIFEST_SRC_ROOT: '{{MANIFEST_SRC_ROOT}}'
         with:
           # Subscription auth (Pro/Max) — the SAME plan-billed path as
           # claude-run.yml / claude-derive.yml, NOT anthropic_api_key.
@@ -149,6 +154,8 @@ jobs:
         env:
           MANIFEST_OUT_DIR: ${{ runner.temp }}/book-check
           MANIFEST_DETERMINISTIC: 'true'
+          MANIFEST_LANG: '{{MANIFEST_LANG}}'
+          MANIFEST_SRC_ROOT: '{{MANIFEST_SRC_ROOT}}'
         run: |
           if [ ! -f codebook.json ]; then
             echo "No codebook.json after the pass — nothing to commit."

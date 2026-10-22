@@ -75,10 +75,12 @@ viewer; the book points at them, it does not replace them.
   keeps its id keeps the reader's bookmarks and progress).
 - `title` — ≤ 60 characters, plain language, not a file name.
 - `area` — a `codemap.json` area id, or `null` for a chapter that spans areas.
-- `files` — bare names relative to the source root, exactly as `codetour.json`
-  spells them (`main.js`, not `src/main.js`). 3–9 files; these are what the
-  chapter is about and what chapter-scoped chat attaches. Every name must exist
-  in the symbols index.
+- `files` — exactly as the symbols index keys them, which is how
+  `codetour.json` spells them too: bare names relative to the source root on
+  web repos (`main.js`, not `src/main.js`), repo-root-relative paths on .NET
+  repos (`Services/TaskStore.cs`). Check `/tmp/book-in/src-symbols.json` when
+  unsure. 3–9 files; these are what the chapter is about and what
+  chapter-scoped chat attaches. Every name must exist in the index.
 - `tours` — ids from `codetour.json` whose flows this chapter summarises. May be
   empty. Every id must exist.
 - `ahead` — optional. A forward reference to a later chapter, used when this
@@ -102,7 +104,10 @@ a tappable chip:
   declared in more than one file, or the generator warns that it is ambiguous.
 - `` `Parent.name` `` — a member under a parent definition (a method on a class
   or object literal).
-- `` `file.js` `` — a file reference; must be in the symbols index.
+- `` `file.js` `` / `` `Folder/File.cs` `` — a file reference; must be a key
+  in the symbols index. On .NET repos a member reference is `` `Type.Member` ``
+  (every member has its type as `parent`), and `` `Folder/File.cs:Member` ``
+  pins the file.
 
 A span that names nothing stays plain text with no warning — so a backticked
 word that is NOT meant as a reference (a CSS class, a localStorage key, a

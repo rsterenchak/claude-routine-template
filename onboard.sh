@@ -115,6 +115,10 @@ MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
 DOTNET_MANIFEST_FILES=(
   "scripts/gen-src-manifest.js"
   ".github/workflows/manifest-dotnet.yml>.github/workflows/manifest.yml"
+  # The code-book pass: csharp mode now builds the symbols index the book and
+  # tours resolve against, so .NET repos get the Understanding tab too.
+  ".claude/book.md"
+  ".github/workflows/claude-book.yml"
 )
 # SQL manifest publishing — the same scanner run in sql mode + a publish
 # workflow that serves src-manifest.json from main root (like served-from-
@@ -1230,6 +1234,15 @@ SRC_DIR_VAL="$SRC_PREFIX"; [ "${SRC_DIR_VAL#\(}" != "$SRC_DIR_VAL" ] && SRC_DIR_
 TEST_DIR_VAL="tests/"
 DOTNET_VERSION_VAL=""
 MANIFEST_SRC_ROOT_VAL=""
+# The generator's language mode for workflows that run it outside manifest.yml
+# (claude-book.yml): empty = web (the generator's default), 'csharp' on the
+# .NET shapes, 'sql' on sql. manifest-dotnet.yml / manifest-sql.yml hardcode
+# theirs and are unaffected.
+MANIFEST_LANG_VAL=""
+case "$SHAPE" in
+  console|desktop|maui) MANIFEST_LANG_VAL="csharp" ;;
+  sql)                  MANIFEST_LANG_VAL="sql" ;;
+esac
 if [ "$SHAPE" = "console" ] || [ "$SHAPE" = "desktop" ] || [ "$SHAPE" = "maui" ]; then
   # .NET defaults (console + desktop + maui share the dotnet command set).
   TEST_CMD_VAL="dotnet test"
@@ -1357,6 +1370,7 @@ for pf in "${PLACEHOLDER_FILES[@]}"; do
   subst "$fpath" "MANIFEST_VARIANT" "$MANIFEST_VARIANT"
   [ -n "$DOTNET_VERSION_VAL" ] && subst "$fpath" "DOTNET_VERSION" "$DOTNET_VERSION_VAL"
   subst "$fpath" "MANIFEST_SRC_ROOT" "$MANIFEST_SRC_ROOT_VAL"
+  subst "$fpath" "MANIFEST_LANG" "$MANIFEST_LANG_VAL"
 done
 echo "  ${c_grn}filled${c_rst} placeholders in $(printf '%s, ' "${PLACEHOLDER_FILES[@]}" | sed 's/, $//')"
 echo "  ${c_yel}note${c_rst}  the \"Key files\" section of CLAUDE.md and the freeform sections of"

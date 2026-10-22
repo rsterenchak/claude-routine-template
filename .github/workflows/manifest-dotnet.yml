@@ -24,7 +24,11 @@ name: Update source manifest (.NET)
 # ALLOWED_TARGETS — which is what makes emitted paths resolve for chat
 # attachment. Leave it blank for a project that sits at the repo root.
 #
-# Loop prevention: paths-ignore skips src-manifest.json (so the manifest
+# The generator also writes src-symbols.json (definitions index for code
+# tracing) and, when codetour.json / codebook.json exist, src-tours.json /
+# src-book.json — the Understanding tab's content, served from the same root.
+#
+# Loop prevention: paths-ignore skips the generated files (so the manifest
 # commit doesn't re-trigger this workflow) and the commit carries [skip ci].
 # ─────────────────────────────────────────────────────────────────
 
@@ -34,6 +38,9 @@ on:
     paths-ignore:
       - 'TODO.md'
       - 'src-manifest.json'
+      - 'src-symbols.json'
+      - 'src-tours.json'
+      - 'src-book.json'
   workflow_dispatch:
 
 permissions:
@@ -57,14 +64,20 @@ jobs:
           MANIFEST_OUT_DIR: '.'
           MANIFEST_DETERMINISTIC: 'true'
 
-      - name: Commit manifest if the file list changed
+      - name: Commit manifest outputs if they changed
         run: |
-          if [[ -n "$(git status --porcelain src-manifest.json)" ]]; then
+          files=""
+          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
+            if [[ -f "$f" && -n "$(git status --porcelain "$f")" ]]; then
+              files="$files $f"
+            fi
+          done
+          if [[ -n "$files" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add src-manifest.json
+            git add $files
             git commit -m "Update source manifest [skip ci]"
             git push
           else
-            echo "Manifest unchanged — nothing to commit."
+            echo "Manifest outputs unchanged — nothing to commit."
           fi

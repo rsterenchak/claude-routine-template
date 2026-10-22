@@ -42,17 +42,20 @@
 // files/regions/types/tables, hasDom:false). csharp types and members carry a
 // 1-based `end` line beside `line`.
 //
-// Web mode also writes src-symbols.json beside the manifest — a definitions
-// index for code tracing: { version, files: { path: { defs: [{ name, kind,
-// start, end, parent }], imports: { localName: { from, name } } } } }. Kept
-// separate because the PWA fetches it lazily; never timestamped.
+// Web and csharp modes also write src-symbols.json beside the manifest — a
+// definitions index for code tracing: { version, files: { path: { defs: [{
+// name, kind, start, end, parent }], imports: { localName: { from, name } } } } }.
+// Kept separate because the PWA fetches it lazily; never timestamped. In csharp
+// mode the keys are the manifest's repo-root-relative .cs paths and `imports`
+// is always empty.
 //
-// When a committed codetour.json sits beside scripts/, web mode also compiles
+// When a committed codetour.json sits beside scripts/, web and csharp modes
+// compile
 // it into src-tours.json — guided code tours whose steps are anchored by
 // symbol + match text and enriched with line, area, next and an embedded
 // snippet. Deterministic; steps that no longer resolve are warned and dropped.
 //
-// When a committed codebook.json sits beside scripts/ too, web mode compiles it
+// When a committed codebook.json sits beside scripts/ too, they compile it
 // into src-book.json — ordered chapters of prose whose backticked references
 // resolve to definitions in the same symbols index, with each chapter's tours
 // resolved from the compiled tours. Deterministic; a chapter with a reference,
@@ -770,7 +773,8 @@ function buildWebTours(opts) {
   const root = o.srcDir || srcDir;
   const doc = readJsonFile(o.tourPath || path.resolve(root, '..', 'codetour.json'));
   if (!doc) return null;
-  const sources = readWebSources(root).sources;
+  // `sources` overrides the src/ read — csharp mode passes its .cs list.
+  const sources = o.sources || readWebSources(root).sources;
   const symbols = o.symbols || buildSymbols(sources);
   const areas = readCodemapAreas(o.codemapPath || path.resolve(root, '..', 'codemap.json'));
   return compileTours(doc, symbols, sources, areas, o.warn);
@@ -796,7 +800,7 @@ function writeWebTours(opts) {
 const BOOK_VERSION = 1;
 const BOOK_WORDS_PER_MINUTE = 200;
 const BOOK_REF_RE = /`([^`\n]+)`/g;
-const BOOK_FILE_RE = /^[\w./-]+\.(?:jsx?|tsx?|mjs|cjs)$/;
+const BOOK_FILE_RE = /^[\w./-]+\.(?:jsx?|tsx?|mjs|cjs|cs)$/;
 const BOOK_NAME_RE = /^(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)$/;
 
 // Defs named `name` (under `parent` when given) across `files`, each as
@@ -1178,6 +1182,64 @@ function buildCsharpManifest() {
   return { files: files, srcRoot: '', regions: [], hasDom: false, types: types, lens: 'types' };
 }
 
+// The { name, text } list of the .cs files buildCsharpManifest inventories,
+// `name` repo-root-relative and sorted. `opts.repoRoot` / `opts.srcRoot`
+// override the script's root and MANIFEST_SRC_ROOT (for tests).
+function readCsharpSources(opts) {
+  const o = opts || {};
+  const root = o.repoRoot || repoRoot;
+  const scope = o.srcRoot !== undefined ? o.srcRoot : process.env.MANIFEST_SRC_ROOT;
+  const walkRoot = scope ? path.resolve(root, scope) : root;
+  const rel = function (p) { return path.relative(root, p).split(path.sep).join('/'); };
+  const out = [];
+  walkCs(walkRoot).forEach(function (abs) {
+    try { out.push({ name: rel(abs), text: fs.readFileSync(abs, 'utf8') }); } catch (e) { /* unreadable — skip */ }
+  });
+  return out.sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); });
+}
+
+// The scanCsharpTypes outline of one file as symbols-index defs: one per type
+// and one per member, each parented by the innermost type whose lines enclose
+// it (a nested type's members included). A constructor is named `constructor`,
+// as in the web index, so a bare type name never collides with it.
+function csharpDefs(text, name) {
+  const types = scanCsharpTypes(text, name);
+  // Innermost type enclosing [start, end], other than `self`; `fallback` wins
+  // ties (the scanner's own owner for a member).
+  function enclosing(start, end, self, fallback) {
+    let best = null;
+    types.forEach(function (t) {
+      if (t === self || t.line > start || t.end < end) return;
+      if (self && t.line === self.line && t.end === self.end) return;
+      if (!best || t.line > best.line || (t.line === best.line && t.end < best.end) ||
+          (t.line === best.line && t.end === best.end && t === fallback)) best = t;
+    });
+    return best || fallback || null;
+  }
+  const defs = [];
+  types.forEach(function (t) {
+    const outer = enclosing(t.line, t.end, t, null);
+    defs.push({ name: t.name, kind: t.kind, start: t.line, end: t.end, parent: outer ? outer.name : null });
+    t.members.forEach(function (mm) {
+      const owner = enclosing(mm.line, mm.end, null, t);
+      const ctor = mm.kind === 'method' && mm.name === owner.name;
+      defs.push({ name: ctor ? 'constructor' : mm.name, kind: ctor ? 'constructor' : mm.kind, start: mm.line, end: mm.end, parent: owner.name });
+    });
+  });
+  return defs.sort(function (a, b) { return a.start - b.start || b.end - a.end; });
+}
+
+// The csharp counterpart of buildWebSymbols: the same { version, files }
+// index, keyed by repo-root-relative .cs path. `opts.sources` skips the walk.
+function buildCsharpSymbols(opts) {
+  const o = opts || {};
+  const sources = o.sources || readCsharpSources(o);
+  const files = {};
+  sources.slice().sort(function (a, b) { return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0); })
+    .forEach(function (s) { files[s.name] = { defs: csharpDefs(s.text, s.name), imports: {} }; });
+  return { version: SYMBOLS_VERSION, files: files };
+}
+
 // ── sql mode: recursive .sql inventory, repo-root-relative paths ──
 // Regex parse of each .sql into its CREATE TABLE blocks and their columns +
 // table-level constraints, for the Structure tab's SQL lens. Like the csharp
@@ -1338,7 +1400,7 @@ function buildManifest() {
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, compileTours: compileTours, buildWebTours: buildWebTours, writeWebTours: writeWebTours, compileBook: compileBook, buildWebBook: buildWebBook, writeWebBook: writeWebBook, scanCsharpTypes: scanCsharpTypes, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
+module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, compileTours: compileTours, buildWebTours: buildWebTours, writeWebTours: writeWebTours, compileBook: compileBook, buildWebBook: buildWebBook, writeWebBook: writeWebBook, scanCsharpTypes: scanCsharpTypes, readCsharpSources: readCsharpSources, buildCsharpSymbols: buildCsharpSymbols, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
 
 if (require.main === module) {
   const manifest = buildManifest();
@@ -1353,20 +1415,23 @@ if (require.main === module) {
     (manifest.modules ? manifest.modules.length : 0), 'modules,',
     (manifest.areas ? manifest.areas.length : 0), 'areas, hasDom=' + manifest.hasDom + ', lens=' + manifest.lens
   );
-  // The definitions index is web-only and never timestamped, so it only
-  // changes when the source does.
-  if (langMode() === 'web') {
-    const symbols = buildWebSymbols();
+  // The definitions index (web and csharp only) is never timestamped, so it
+  // only changes when the source does. Tours and the book compile against the
+  // mode's own sources, so step and chapter paths match the index keys.
+  const mode = langMode();
+  if (mode === 'web' || mode === 'csharp') {
+    const sources = mode === 'csharp' ? readCsharpSources() : undefined;
+    const symbols = mode === 'csharp' ? buildCsharpSymbols({ sources: sources }) : buildWebSymbols();
     const json = JSON.stringify(symbols);
     fs.writeFileSync(path.join(outDir, 'src-symbols.json'), json);
     const defCount = Object.keys(symbols.files).reduce(function (n, f) { return n + symbols.files[f].defs.length; }, 0);
     console.log('src-symbols.json written to ' + outDirName + '/ —', defCount, 'defs,', (Buffer.byteLength(json) / 1024).toFixed(1) + ' KB');
-    const tours = writeWebTours({ symbols: symbols });
+    const tours = writeWebTours({ symbols: symbols, sources: sources });
     if (tours) {
       const stepCount = tours.tours.reduce(function (n, t) { return n + t.steps.length; }, 0);
       console.log('src-tours.json written to ' + outDirName + '/ —', tours.tours.length, 'tours,', stepCount, 'steps');
     }
-    const book = writeWebBook({ symbols: symbols, tours: tours });
+    const book = writeWebBook({ symbols: symbols, tours: tours, sources: sources });
     if (book) {
       const refCount = book.chapters.reduce(function (n, c) {
         return n + c.paragraphs.reduce(function (k, p) { return k + p.filter(function (s) { return s.ref; }).length; }, 0);
