@@ -35,6 +35,7 @@ on:
 
 permissions:
   contents: write     # the book pass commits codebook.json back to main
+  actions: write      # …and dispatches the publish workflow afterwards (see below)
   id-token: write     # required: the action authenticates via OIDC
 
 concurrency:
@@ -203,19 +204,45 @@ jobs:
           fi
           rm -f gen.out gen.err
 
-      # Commit the book. No [skip ci]: deploy.yml / manifest.yml must run so the
-      # published src-book.json picks up the new chapters. paths-ignore in those
-      # workflows covers the GENERATED files, not codebook.json, so this commit
-      # triggers exactly one republish.
+      # Commit the book. Two things about the push:
+      #   1. claude-code-action rewrites the checkout's remote URL with its own
+      #      app token and REVOKES that token in its post step, so a plain
+      #      `git push` here fails with "Invalid username or token". Point the
+      #      remote back at the workflow's GITHUB_TOKEN first.
+      #   2. A GITHUB_TOKEN push does not trigger other workflows, so the
+      #      republish (manifest.yml / deploy.yml) is dispatched explicitly in
+      #      the next step rather than relied on as a push trigger.
       - name: Commit codebook.json if it changed
+        id: commit
         working-directory: {{WORKING_DIR}}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [ ! -f codebook.json ] || [ -z "$(git status --porcelain codebook.json)" ]; then
             echo "codebook.json unchanged — nothing to commit."
+            echo "changed=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add codebook.json
           git commit -m "Update code book (${{ inputs.scope || 'stale' }})"
-          git push
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:main
+          echo "changed=1" >> "$GITHUB_OUTPUT"
+
+      # Republish src-book.json: manifest.yml on served-from-source and .NET
+      # repos, deploy.yml on build-pipeline repos. Whichever exists, once.
+      - name: Republish the manifest outputs
+        if: steps.commit.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for wf in manifest.yml deploy.yml; do
+            if [ -f ".github/workflows/$wf" ]; then
+              gh workflow run "$wf" --ref main
+              echo "Dispatched $wf"
+              exit 0
+            fi
+          done
+          echo "No manifest.yml or deploy.yml to dispatch — src-book.json republishes on the next push."

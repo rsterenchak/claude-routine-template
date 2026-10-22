@@ -49,6 +49,9 @@ on:
       - main
     paths-ignore:
       - 'TODO.md'
+  # claude-book.yml dispatches this after committing codebook.json, since its
+  # GITHUB_TOKEN push would not trigger the push event above.
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:

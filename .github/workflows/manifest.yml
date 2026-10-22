@@ -30,6 +30,9 @@ on:
       - 'src-symbols.json'
       - 'src-tours.json'
       - 'src-book.json'
+  # claude-book.yml dispatches this after committing codebook.json, since its
+  # GITHUB_TOKEN push would not trigger the push event above.
+  workflow_dispatch:
 
 permissions:
   contents: write
