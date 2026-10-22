@@ -51,6 +51,12 @@
 // it into src-tours.json — guided code tours whose steps are anchored by
 // symbol + match text and enriched with line, area, next and an embedded
 // snippet. Deterministic; steps that no longer resolve are warned and dropped.
+//
+// When a committed codebook.json sits beside scripts/ too, web mode compiles it
+// into src-book.json — ordered chapters of prose whose backticked references
+// resolve to definitions in the same symbols index, with each chapter's tours
+// resolved from the compiled tours. Deterministic; a chapter with a reference,
+// file, tour or ahead link that no longer resolves is warned and marked stale.
 // ─────────────────────────────────────────────────────────────────
 
 const fs = require('fs');
@@ -694,6 +700,25 @@ function buildTourSnippet(lines, hits) {
   return capped;
 }
 
+// The recap cards for `tour` as { title, body } (what tourPlayer renders): a
+// string item becomes a title-only card, anything without a non-empty title
+// is dropped, each with a warning.
+function compileTourRecap(tour, say) {
+  const cards = [];
+  (Array.isArray(tour.recap) ? tour.recap : []).forEach(function (item, i) {
+    const at = 'Warning: codetour.json: tour "' + tour.id + '" recap item ' + (i + 1);
+    if (typeof item === 'string' && item) {
+      say(at + ' is a string — normalized to { title, body: "" }');
+      cards.push({ title: item, body: '' });
+    } else if (item && typeof item === 'object' && typeof item.title === 'string' && item.title) {
+      cards.push(item);
+    } else {
+      say(at + ' has no title — item dropped');
+    }
+  });
+  return cards;
+}
+
 // { version, sections, tours } compiled from a parsed codetour.json.
 // `sources` is the { name, text } list the symbols were built from; `areas`
 // the codemap areas (optional).
@@ -733,7 +758,7 @@ function compileTours(doc, symbols, sources, areas, warn) {
     // A whole-file step is labelled by its file name, not `@file`.
     const label = function (s) { return s.symbol === TOUR_FILE_SYMBOL ? s.file.split('/').pop() : s.symbol; };
     steps.forEach(function (s, i) { s.next = i + 1 < steps.length ? label(steps[i + 1]) : null; });
-    tours.push({ id: tour.id, section: tour.section, title: tour.title, recap: Array.isArray(tour.recap) ? tour.recap : [], steps: steps });
+    tours.push({ id: tour.id, section: tour.section, title: tour.title, recap: compileTourRecap(tour, say), steps: steps });
   });
   return { version: TOURS_VERSION, sections: (doc && Array.isArray(doc.sections)) ? doc.sections : [], tours: tours };
 }
@@ -759,6 +784,186 @@ function writeWebTours(opts) {
   if (!tours) return null;
   fs.writeFileSync(path.join(o.outDir || outDir, 'src-tours.json'), JSON.stringify(tours));
   return tours;
+}
+
+// ── web code book (codebook.json → src-book.json) ─────────────────
+// The codebase told as ordered chapters that read front-to-back once. A
+// committed codebook.json holds each chapter's prose; every backticked span in
+// a paragraph is a reference, resolved against the symbols index from the same
+// run into a { label, file, symbol, parent, line, end } chip, so the reader
+// needs no further lookups. A reference, file, tour or ahead link that stops
+// resolving is warned and marks its chapter stale instead of shipping wrong.
+const BOOK_VERSION = 1;
+const BOOK_WORDS_PER_MINUTE = 200;
+const BOOK_REF_RE = /`([^`\n]+)`/g;
+const BOOK_FILE_RE = /^[\w./-]+\.(?:jsx?|tsx?|mjs|cjs)$/;
+const BOOK_NAME_RE = /^(?:([A-Za-z_$][\w$]*)\.)?([A-Za-z_$][\w$]*)$/;
+
+// Defs named `name` (under `parent` when given) across `files`, each as
+// { file, def }.
+function bookDefsIn(symbols, files, name, parent) {
+  const out = [];
+  files.forEach(function (f) {
+    const entry = symbols.files[f];
+    (entry ? entry.defs : []).forEach(function (d) {
+      if (d.name === name && (parent === null || d.parent === parent)) out.push({ file: f, def: d });
+    });
+  });
+  return out;
+}
+
+// { ref } for a resolved span, { error } for a broken one, or {} for a span
+// that names nothing and stays plain text.
+function resolveBookRef(span, chapterFiles, symbols) {
+  const label = span;
+  const known = Object.keys(symbols.files);
+  const toRef = function (hit) {
+    return { ref: { label: label, file: hit.file, symbol: hit.def.name, parent: hit.def.parent === undefined ? null : hit.def.parent, line: hit.def.start, end: hit.def.end } };
+  };
+  if (BOOK_FILE_RE.test(span)) {
+    if (!symbols.files[span]) return { error: 'file "' + span + '" is not in the symbols index' };
+    return { ref: { label: label, file: span, symbol: null, parent: null, line: 1, end: null } };
+  }
+  const colon = span.indexOf(':');
+  if (colon !== -1 && BOOK_FILE_RE.test(span.slice(0, colon))) {
+    const file = span.slice(0, colon);
+    const nm = BOOK_NAME_RE.exec(span.slice(colon + 1));
+    if (!symbols.files[file]) return { error: 'pinned file "' + file + '" is not in the symbols index' };
+    if (!nm) return {};
+    const hits = bookDefsIn(symbols, [file], nm[2], nm[1] || null);
+    if (!hits.length) return { error: '"' + span + '" names no definition in ' + file };
+    if (hits.length > 1) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs in ' + file + ')' };
+    return toRef(hits[0]);
+  }
+  const nm = BOOK_NAME_RE.exec(span);
+  if (!nm) return {};
+  const parent = nm[1] || null;
+  let hits = bookDefsIn(symbols, chapterFiles, nm[2], parent);
+  if (!hits.length) hits = bookDefsIn(symbols, known, nm[2], parent);
+  if (hits.length > 1) return { error: '"' + span + '" is ambiguous (' + hits.length + ' defs) — pin it as `file.js:' + span + '`' };
+  return hits.length ? toRef(hits[0]) : {};
+}
+
+// A paragraph as segments: { t } runs of text and { ref } chips. A span that
+// doesn't resolve stays in the text, backticks and all.
+function compileBookParagraph(text, chapterFiles, symbols, note) {
+  const segs = [];
+  const pushText = function (t) {
+    if (!t) return;
+    const last = segs[segs.length - 1];
+    if (last && last.t !== undefined) last.t += t; else segs.push({ t: t });
+  };
+  let at = 0, m;
+  BOOK_REF_RE.lastIndex = 0;
+  while ((m = BOOK_REF_RE.exec(text))) {
+    pushText(text.slice(at, m.index));
+    const r = resolveBookRef(m[1], chapterFiles, symbols);
+    if (r.error) note('reference ' + r.error + ' — kept as text');
+    if (r.ref) segs.push({ ref: r.ref }); else pushText(m[0]);
+    at = m.index + m[0].length;
+  }
+  pushText(text.slice(at));
+  return segs;
+}
+
+// { version, title, chapters } compiled from a parsed codebook.json. `tours`
+// is the compiled src-tours output of the same run (or null); `areas` the
+// codemap areas (optional).
+function compileBook(doc, symbols, tours, areas, warn) {
+  const say = warn || console.warn;
+  const index = symbols && symbols.files ? symbols : { files: {} };
+  const tourById = {};
+  ((tours && Array.isArray(tours.tours)) ? tours.tours : []).forEach(function (t) { tourById[t.id] = t; });
+  const areaIds = Array.isArray(areas) ? new Set(areas.map(function (a) { return a && a.id; })) : null;
+  const raw = ((doc && Array.isArray(doc.chapters)) ? doc.chapters : []).filter(function (ch, i) {
+    if (ch && typeof ch.id === 'string' && ch.id) return true;
+    say('Warning: codebook.json: chapter ' + (i + 1) + ' has no id — chapter dropped');
+    return false;
+  });
+  const chapters = [];
+  raw.forEach(function (ch) {
+    const warnings = [];
+    const note = function (msg) {
+      warnings.push(msg);
+      say('Warning: codebook.json: chapter "' + ch.id + '": ' + msg);
+    };
+    const files = (Array.isArray(ch.files) ? ch.files : []).filter(function (f) {
+      if (index.files[f]) return true;
+      note('file "' + f + '" is not in the symbols index');
+      return false;
+    });
+    const tourRefs = [];
+    (Array.isArray(ch.tours) ? ch.tours : []).forEach(function (id) {
+      const t = tourById[id];
+      if (t) tourRefs.push({ id: t.id, title: t.title, steps: t.steps.length });
+      else note('tour "' + id + '" is not in the compiled tours');
+    });
+    let area = ch.area === undefined ? null : ch.area;
+    if (area !== null && areaIds && !areaIds.has(area)) {
+      note('area "' + area + '" is not in codemap.json');
+      area = null;
+    }
+    let ahead = null;
+    if (ch.ahead && typeof ch.ahead === 'object') {
+      const target = raw.find(function (c) { return c.id === ch.ahead.chapter; });
+      if (target) ahead = { chapter: target.id, title: target.title, note: ch.ahead.note || '' };
+      else note('ahead chapter "' + ch.ahead.chapter + '" does not exist — dropped');
+    }
+    const body = (Array.isArray(ch.body) ? ch.body : []).filter(function (p) { return typeof p === 'string' && p.trim(); });
+    if (!body.length) {
+      say('Warning: codebook.json: chapter "' + ch.id + '" has no paragraphs — chapter dropped');
+      return;
+    }
+    const paragraphs = body.map(function (p) { return compileBookParagraph(p, files, index, note); });
+    const words = body.reduce(function (n, p) { return n + p.split(/\s+/).filter(Boolean).length; }, 0);
+    chapters.push({
+      id: ch.id,
+      index: chapters.length + 1,
+      title: ch.title,
+      area: area,
+      files: files,
+      tours: tourRefs,
+      paragraphs: paragraphs,
+      ahead: ahead,
+      minutes: Math.max(1, Math.round(words / BOOK_WORDS_PER_MINUTE)),
+      stale: warnings.length > 0,
+      warnings: warnings,
+    });
+  });
+  // An ahead link to a chapter dropped for having no paragraphs goes too.
+  chapters.forEach(function (c) {
+    if (c.ahead && !chapters.some(function (o) { return o.id === c.ahead.chapter; })) {
+      const msg = 'ahead chapter "' + c.ahead.chapter + '" was dropped — link dropped';
+      say('Warning: codebook.json: chapter "' + c.id + '": ' + msg);
+      c.warnings.push(msg);
+      c.stale = true;
+      c.ahead = null;
+    }
+  });
+  return { version: BOOK_VERSION, title: (doc && doc.title) || '', chapters: chapters };
+}
+
+// The compiled book for the web source under `srcDir`, or null when
+// codebook.json is absent (nothing is written then).
+function buildWebBook(opts) {
+  const o = opts || {};
+  const root = o.srcDir || srcDir;
+  const doc = readJsonFile(o.bookPath || path.resolve(root, '..', 'codebook.json'));
+  if (!doc) return null;
+  const symbols = o.symbols || buildWebSymbols({ srcDir: root });
+  const tours = o.tours !== undefined ? o.tours : buildWebTours(Object.assign({}, o, { symbols: symbols }));
+  const areas = readCodemapAreas(o.codemapPath || path.resolve(root, '..', 'codemap.json'));
+  return compileBook(doc, symbols, tours, areas, o.warn);
+}
+
+// Writes src-book.json into `outDir` when codebook.json exists; returns the
+// compiled book, or null when nothing was written.
+function writeWebBook(opts) {
+  const o = opts || {};
+  const book = buildWebBook(o);
+  if (!book) return null;
+  fs.writeFileSync(path.join(o.outDir || outDir, 'src-book.json'), JSON.stringify(book));
+  return book;
 }
 
 // ── csharp mode: recursive .cs inventory, repo-root-relative paths ──
@@ -1133,7 +1338,7 @@ function buildManifest() {
   return finalize(base);
 }
 
-module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, compileTours: compileTours, buildWebTours: buildWebTours, writeWebTours: writeWebTours, scanCsharpTypes: scanCsharpTypes, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
+module.exports = { scanRegions: scanRegions, parseImports: parseImports, extractPurpose: extractPurpose, buildModules: buildModules, codemapWarnings: codemapWarnings, buildWebManifest: buildWebManifest, scanJsDefs: scanJsDefs, parseImportBindings: parseImportBindings, buildSymbols: buildSymbols, buildWebSymbols: buildWebSymbols, compileTours: compileTours, buildWebTours: buildWebTours, writeWebTours: writeWebTours, compileBook: compileBook, buildWebBook: buildWebBook, writeWebBook: writeWebBook, scanCsharpTypes: scanCsharpTypes, prettify: prettify, buildManifest: buildManifest, walkCs: walkCs, walkSql: walkSql, walkDoc: walkDoc };
 
 if (require.main === module) {
   const manifest = buildManifest();
@@ -1160,6 +1365,14 @@ if (require.main === module) {
     if (tours) {
       const stepCount = tours.tours.reduce(function (n, t) { return n + t.steps.length; }, 0);
       console.log('src-tours.json written to ' + outDirName + '/ —', tours.tours.length, 'tours,', stepCount, 'steps');
+    }
+    const book = writeWebBook({ symbols: symbols, tours: tours });
+    if (book) {
+      const refCount = book.chapters.reduce(function (n, c) {
+        return n + c.paragraphs.reduce(function (k, p) { return k + p.filter(function (s) { return s.ref; }).length; }, 0);
+      }, 0);
+      const staleCount = book.chapters.filter(function (c) { return c.stale; }).length;
+      console.log('src-book.json written to ' + outDirName + '/ —', book.chapters.length, 'chapters,', refCount, 'references,', staleCount, 'stale');
     }
   }
 }
