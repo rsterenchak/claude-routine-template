@@ -1,0 +1,84 @@
+diff --git a/.claude/book.md b/.claude/book.md
+index ff7035d..6d429fc 100644
+--- a/.claude/book.md
++++ b/.claude/book.md
+@@ -17,8 +17,9 @@ viewer; the book points at them, it does not replace them.
+ - `WORKING_DIR` — the project folder (`{{WORKING_DIR}}` on this repo). Run every
+   command below from inside it. `codebook.json`, `codemap.json` and
+   `codetour.json` sit there, beside `scripts/`.
+-- `MANIFEST_VARIANT` — the generator file name (`{{MANIFEST_VARIANT}}`). Run it
+-  as `node scripts/$MANIFEST_VARIANT`.
++- `MANIFEST_VARIANT` — the generator file name, resolved by the workflow from
++  what is in `scripts/` (`gen-src-manifest.js` or `.cjs`). Run it as
++  `node scripts/$MANIFEST_VARIANT`.
+ - `BOOK_SCOPE` — `stale` or `all`. See "Scope" below.
+ 
+ ## Inputs — read these first, in this order
+diff --git a/.github/workflows/claude-book.yml b/.github/workflows/claude-book.yml
+index b67b876..e291465 100644
+--- a/.github/workflows/claude-book.yml
++++ b/.github/workflows/claude-book.yml
+@@ -68,6 +68,26 @@ jobs:
+           elif [ -f package.json ]; then npm install || true
+           fi
+ 
++      # Resolve the generator file. {{MANIFEST_VARIANT}} is filled on the web
++      # shapes (gen-src-manifest.js / .cjs) but onboard.sh writes a "(none — …)"
++      # note on the .NET shapes, which only deploy.yml ever read — so the first
++      # .NET book run tried to execute `node scripts/(none — desktop project)`.
++      # Go by what is actually in scripts/ and export the basename for the
++      # agent step and the gate; fail loudly if neither variant exists.
++      - name: Resolve generator
++        working-directory: {{WORKING_DIR}}
++        run: |
++          gen=""
++          for cand in "{{MANIFEST_VARIANT}}" gen-src-manifest.js gen-src-manifest.cjs; do
++            if [ -n "$cand" ] && [ -f "scripts/$cand" ]; then gen="$cand"; break; fi
++          done
++          if [ -z "$gen" ]; then
++            echo "No scripts/gen-src-manifest.js or .cjs in $(pwd) — the book pass needs the manifest generator."
++            exit 1
++          fi
++          echo "MANIFEST_VARIANT=$gen" >> "$GITHUB_ENV"
++          echo "Generator: scripts/$gen"
++
+       # Resolve model routing. Identical to claude-derive.yml: claude-* ids
+       # (and no pick) stay on plan via OAuth; anything else reroutes every
+       # Claude Code call through the Worker's /anthropic gateway.
+@@ -111,7 +131,7 @@ jobs:
+         env:
+           BOOK_SCOPE: ${{ inputs.scope || 'stale' }}
+           WORKING_DIR: {{WORKING_DIR}}
+-          MANIFEST_VARIANT: {{MANIFEST_VARIANT}}
++          # MANIFEST_VARIANT comes from the Resolve generator step (GITHUB_ENV).
+           # Empty on web repos (the generator's default mode); 'csharp' on the
+           # .NET shapes so the routine's own generator runs and the gate below
+           # build the same index manifest.yml publishes.
+@@ -161,7 +181,7 @@ jobs:
+             echo "No codebook.json after the pass — nothing to commit."
+             exit 0
+           fi
+-          node scripts/{{MANIFEST_VARIANT}} > gen.out 2> gen.err || { cat gen.err; exit 1; }
++          node "scripts/$MANIFEST_VARIANT" > gen.out 2> gen.err || { cat gen.err; exit 1; }
+           cat gen.out
+           if grep -q 'Warning: codebook.json' gen.err; then
+             echo "codebook.json produced warnings — refusing to commit:"
+diff --git a/onboard.sh b/onboard.sh
+index d6d7694..725cd33 100755
+--- a/onboard.sh
++++ b/onboard.sh
+@@ -780,6 +780,14 @@ wf_backfill_pairs() {
+   printf 'MANIFEST_VARIANT=%s\n'  "${MANIFEST_VARIANT:-}"
+   printf 'MANIFEST_SRC_ROOT=%s\n' "${sp%/}"
+   printf 'DOTNET_VERSION=%s\n'    "${ONBOARD_DOTNET:-10.0.x}"
++  # Mirrors MANIFEST_LANG_VAL in section 4b: without it the preflight rendered
++  # claude-book.yml with {{MANIFEST_LANG}} unfilled and reported a freshly
++  # created, correct file as "has local edits — hand merge".
++  case "$SHAPE" in
++    console|desktop|maui) printf 'MANIFEST_LANG=csharp\n' ;;
++    sql)                  printf 'MANIFEST_LANG=sql\n' ;;
++    *)                    printf 'MANIFEST_LANG=\n' ;;
++  esac
+   case "$SHAPE" in
+     console|desktop|maui)
+       printf 'INSTALL_COMMAND=dotnet restore\nTEST_COMMAND=dotnet test\nBUILD_COMMAND=dotnet build\n' ;;
