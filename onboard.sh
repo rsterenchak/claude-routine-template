@@ -71,6 +71,11 @@ NODE_FILES=(
   "scripts/render-check.mjs"
   ".github/workflows/claude-complexity-scan.yml"
   ".github/workflows/claude-scan.yml"
+  # The code-book pass (web shapes only — it needs the symbols index the web
+  # generator writes): the routine the agent executes and the workflow that
+  # dispatches it, validates codebook.json with the generator, and commits it.
+  ".claude/book.md"
+  ".github/workflows/claude-book.yml"
 )
 # Shape-specific files.
 #   build-pipeline (build -> dist/ -> gh-pages): deploy.yml
@@ -1318,7 +1323,9 @@ PLACEHOLDER_FILES=(
   ".claude/triage.md"
   ".claude/derive.md"
   ".claude/project-derive.md"
+  ".claude/book.md"
   ".github/workflows/test.yml"
+  ".github/workflows/claude-book.yml"
 )
 # Add the shape-specific workflow so its placeholders ({{WORKING_DIR}},
 # {{BUILD_COMMAND}}, {{MANIFEST_VARIANT}}, {{DOTNET_VERSION}}, etc.) get filled.

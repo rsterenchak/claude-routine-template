@@ -1,0 +1,194 @@
+name: Claude book
+
+# The code-book pass: writes or refreshes `codebook.json` — the codebase told
+# as ordered chapters the Understanding tab renders — and commits it to main.
+# Sibling of claude-derive.yml (same dispatch, same model routing, same
+# plan-billed OAuth); it differs in that it WRITES the repo, which is why
+# permissions carry contents:write and why the commit step below, not the
+# agent, does the push.
+#
+# correlation_id is echoed into run-name so the app/Worker can find this run by
+# name (workflow_dispatch returns no run id — same trick as claude-run.yml).
+# scope decides how much gets rewritten: `stale` (the default) regenerates only
+# chapters the generator flags stale and leaves the rest byte-for-byte; `all`
+# rewrites the book — the first run on a repo with no codebook.json, or an
+# explicit "regenerate everything".
+run-name: Claude book ${{ inputs.correlation_id }} · ${{ inputs.scope || 'stale' }} · ${{ inputs.model || 'default' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: stale (default) regenerates only stale chapters; all rewrites the whole book
+        type: choice
+        options: [stale, all]
+        default: stale
+        required: false
+      correlation_id:
+        description: opaque id echoed into run-name for status polling
+        type: string
+        required: false
+      model:
+        description: resolved model id (empty = workflow default); non-claude-* ids reroute via the Worker gateway
+        type: string
+        required: false
+
+permissions:
+  contents: write     # the book pass commits codebook.json back to main
+  id-token: write     # required: the action authenticates via OIDC
+
+concurrency:
+  # one book pass at a time; a second dispatch queues rather than overlapping
+  # (two concurrent passes would race on the same codebook.json commit).
+  group: claude-book
+  cancel-in-progress: false
+
+jobs:
+  book:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # shallow is enough — the pass reads current source, no history needed
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The agent runs the generator to validate its own references, and the
+      # gate step below runs it again. Both need the project's dependencies
+      # only when the repo's tests are part of the check — the generator itself
+      # is dependency-free. Install is best-effort for that reason.
+      - name: Install dependencies (best effort)
+        working-directory: {{WORKING_DIR}}
+        run: |
+          if [ -f package-lock.json ]; then npm ci || npm install || true
+          elif [ -f package.json ]; then npm install || true
+          fi
+
+      # Resolve model routing. Identical to claude-derive.yml: claude-* ids
+      # (and no pick) stay on plan via OAuth; anything else reroutes every
+      # Claude Code call through the Worker's /anthropic gateway.
+      - name: Resolve model routing
+        env:
+          MODEL: ${{ inputs.model }}
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+        run: |
+          case "$MODEL" in
+            claude-*|"")
+              if [ -z "$MODEL" ]; then
+                echo "No model input — workflow default applies (plan lane)."
+              else
+                echo "Anthropic model '$MODEL' — plan lane via OAuth, no rerouting."
+              fi
+              ;;
+            *)
+              if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+                echo "Third-party model '$MODEL' requested but TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing — cannot route. Failing loudly instead of billing the wrong lane."
+                exit 1
+              fi
+              {
+                echo "ANTHROPIC_BASE_URL=${INJECTOR_URL%/}/anthropic"
+                echo "ANTHROPIC_AUTH_TOKEN=$INJECTOR_SECRET"
+                echo "ANTHROPIC_MODEL=$MODEL"
+                echo "ANTHROPIC_SMALL_FAST_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_OPUS_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_SONNET_MODEL=$MODEL"
+                echo "ANTHROPIC_DEFAULT_HAIKU_MODEL=$MODEL"
+                echo "CLAUDE_CODE_SUBAGENT_MODEL=$MODEL"
+                echo "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+                echo "API_TIMEOUT_MS=600000"
+                echo "ANTHROPIC_CUSTOM_HEADERS=X-Void-Attr: repo=${GITHUB_REPOSITORY}; corr=${{ inputs.correlation_id }}"
+              } >> "$GITHUB_ENV"
+              echo "Model '$MODEL' → third-party gateway (API-billed; plan untouched)."
+              ;;
+          esac
+
+      - uses: anthropics/claude-code-action@v1
+        env:
+          BOOK_SCOPE: ${{ inputs.scope || 'stale' }}
+          WORKING_DIR: {{WORKING_DIR}}
+          MANIFEST_VARIANT: {{MANIFEST_VARIANT}}
+        with:
+          # Subscription auth (Pro/Max) — the SAME plan-billed path as
+          # claude-run.yml / claude-derive.yml, NOT anthropic_api_key.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Opus, like derive: the pass runs rarely and its whole value is the
+          # quality of the explanation — choosing what to say about an area and
+          # what to leave out is where the stronger model earns its keep.
+          # --dangerously-skip-permissions: no human to approve the routine's
+          # generator runs; the agent never pushes (the step below does), so an
+          # errant action can at most dirty the ephemeral runner.
+          claude_args: "--max-turns 80 --model ${{ inputs.model || 'claude-opus-5-5' }} --dangerously-skip-permissions"
+          show_full_output: true
+          prompt: |
+            You are running the autonomous-agent BOOK pass for this repository.
+            Scope: ${{ inputs.scope || 'stale' }}
+
+            Read `.claude/book.md` and execute it exactly as written. It defines
+            what the code book is, the exact `codebook.json` schema the
+            generator compiles, how to decide chapter order, what the `stale`
+            and `all` scopes mean, and how to validate every reference with the
+            generator before you finish.
+
+            Do NOT commit or push. Leave the updated `codebook.json` in the
+            working tree; the workflow's next step validates and commits it.
+
+            Complete the whole pass, then exit with the one-paragraph summary
+            the routine specifies.
+
+      # The gate: the committed book must compile clean. Run the generator into
+      # a scratch directory and refuse to commit a codebook.json that produces
+      # any stale chapter or any codebook warning — a chapter that lies about
+      # the code is worse than the previous one.
+      - name: Validate codebook.json
+        working-directory: {{WORKING_DIR}}
+        env:
+          MANIFEST_OUT_DIR: ${{ runner.temp }}/book-check
+          MANIFEST_DETERMINISTIC: 'true'
+        run: |
+          if [ ! -f codebook.json ]; then
+            echo "No codebook.json after the pass — nothing to commit."
+            exit 0
+          fi
+          node scripts/{{MANIFEST_VARIANT}} > gen.out 2> gen.err || { cat gen.err; exit 1; }
+          cat gen.out
+          if grep -q 'Warning: codebook.json' gen.err; then
+            echo "codebook.json produced warnings — refusing to commit:"
+            grep 'Warning: codebook.json' gen.err
+            exit 1
+          fi
+          if ! grep -q 'src-book.json written' gen.out; then
+            echo "Generator wrote no src-book.json — refusing to commit."
+            exit 1
+          fi
+          if ! grep 'src-book.json written' gen.out | grep -q ' 0 stale'; then
+            echo "src-book.json has stale chapters — refusing to commit."
+            exit 1
+          fi
+          # The repo's own generator tests, when it has them (Void does). A
+          # repo without them skips this silently.
+          if [ -f tests/genSrcManifest.test.js ] && [ -d node_modules ]; then
+            npx vitest run tests/genSrcManifest.test.js
+          fi
+          rm -f gen.out gen.err
+
+      # Commit the book. No [skip ci]: deploy.yml / manifest.yml must run so the
+      # published src-book.json picks up the new chapters. paths-ignore in those
+      # workflows covers the GENERATED files, not codebook.json, so this commit
+      # triggers exactly one republish.
+      - name: Commit codebook.json if it changed
+        working-directory: {{WORKING_DIR}}
+        run: |
+          if [ ! -f codebook.json ] || [ -z "$(git status --porcelain codebook.json)" ]; then
+            echo "codebook.json unchanged — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add codebook.json
+          git commit -m "Update code book (${{ inputs.scope || 'stale' }})"
+          git push
