@@ -199,3 +199,27 @@ jobs:
             echo "claude-run.yml NOT found on ${TARGET_REPO}; the scaffold did not reach origin. See the onboard log above." >&2
             exit 1
           fi
+
+      # Bring the published manifest current. The scaffold commit above carries
+      # [skip ci], so the target's manifest.yml / deploy.yml did not run for it;
+      # dispatch whichever the target has, so src-symbols.json (which the book
+      # pass and the Structure tab both read) exists and matches the refreshed
+      # generator before anyone taps Generate. Best effort: a target whose
+      # workflow file is missing or not yet dispatchable just logs it.
+      - name: Publish the target's manifest outputs
+        if: ${{ inputs.preflight != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          for wf in manifest.yml deploy.yml; do
+            if gh api "repos/${TARGET_REPO}/contents/.github/workflows/${wf}" --jq .name >/dev/null 2>&1; then
+              if gh workflow run "$wf" -R "$TARGET_REPO" --ref main 2>/dev/null; then
+                echo "Dispatched ${wf} on ${TARGET_REPO}."
+              else
+                echo "Could not dispatch ${wf} on ${TARGET_REPO} (not yet indexed by Actions, or no workflow_dispatch) — it runs on the next push."
+              fi
+              exit 0
+            fi
+          done
+          echo "${TARGET_REPO} has no manifest.yml or deploy.yml — nothing to publish."
