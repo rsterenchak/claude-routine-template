@@ -160,6 +160,11 @@ jobs:
             and `all` scopes mean, and how to validate every reference with the
             generator before you finish.
 
+            After your validation pass is clean, run the generator once more
+            with `--write-fingerprints` (per `.claude/book.md`) so every chapter
+            carries the fingerprint of the code it references; the gate below
+            refuses a book whose fingerprints are missing or already drifted.
+
             Do NOT commit or push. Leave the updated `codebook.json` in the
             working tree; the workflow's next step validates and commits it.
 
@@ -195,6 +200,14 @@ jobs:
           fi
           if ! grep 'src-book.json written' gen.out | grep -q ' 0 stale'; then
             echo "src-book.json has stale chapters — refusing to commit."
+            exit 1
+          fi
+          # Every chapter must carry a fingerprint (the routine's final
+          # --write-fingerprints run); a book without them can never report drift.
+          if node -e "const b=require('./codebook.json');process.exit(b.chapters.every(c=>c.fingerprint)?0:1)" 2>/dev/null; then
+            echo "Fingerprints present on every chapter."
+          else
+            echo "codebook.json is missing fingerprints — the routine must run --write-fingerprints after validation. Refusing to commit."
             exit 1
           fi
           # The repo's own generator tests, when it has them (Void does). A

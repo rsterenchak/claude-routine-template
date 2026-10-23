@@ -17,9 +17,8 @@ viewer; the book points at them, it does not replace them.
 - `WORKING_DIR` — the project folder (`{{WORKING_DIR}}` on this repo). Run every
   command below from inside it. `codebook.json`, `codemap.json` and
   `codetour.json` sit there, beside `scripts/`.
-- `MANIFEST_VARIANT` — the generator file name, resolved by the workflow from
-  what is in `scripts/` (`gen-src-manifest.js` or `.cjs`). Run it as
-  `node scripts/$MANIFEST_VARIANT`.
+- `MANIFEST_VARIANT` — the generator file name (`{{MANIFEST_VARIANT}}`). Run it
+  as `node scripts/$MANIFEST_VARIANT`.
 - `BOOK_SCOPE` — `stale` or `all`. See "Scope" below.
 
 ## Inputs — read these first, in this order
@@ -43,6 +42,11 @@ viewer; the book points at them, it does not replace them.
    imports, purpose }]` and `/tmp/book-in/src-symbols.json` → `files: { path:
    { defs: [{ name, kind, start, end, parent }], imports } }`. `defs` is the
    complete list of names a reference may resolve to.
+   Add `--print-map-candidates` (or set `MANIFEST_PRINT_MAP=1`) to that run to
+   print the map chapter's hierarchy to stderr — each area, its front-door
+   files with fan-in / fan-out and purpose, and each file's ranked names keyed
+   as `roles` must key them — these are exactly the names the map's `roles`
+   must cover.
 5. The existing `codebook.json`, when there is one — the chapters you keep
    byte-for-byte under `stale` scope, and the voice to match under `all`.
 6. The source files themselves, as you write each chapter. Every sentence
@@ -62,7 +66,7 @@ viewer; the book points at them, it does not replace them.
       "area": "shell",
       "files": ["index.js", "main.js", "sw.js"],
       "tours": ["app-starts", "app-updates"],
-      "ahead": { "chapter": "data", "note": "Where the cloud copy comes from is the next chapter." },
+      "ahead": { "chapter": "data", "note": "Where the cloud copy comes from is the next chapter.", "promises": ["hydrateFromSupabase"] },
       "body": [
         "Everything begins in `index.js`. Its top-level code runs once …",
         "…"
@@ -76,20 +80,65 @@ viewer; the book points at them, it does not replace them.
   keeps its id keeps the reader's bookmarks and progress).
 - `title` — ≤ 60 characters, plain language, not a file name.
 - `area` — a `codemap.json` area id, or `null` for a chapter that spans areas.
-- `files` — exactly as the symbols index keys them, which is how
-  `codetour.json` spells them too: bare names relative to the source root on
-  web repos (`main.js`, not `src/main.js`), repo-root-relative paths on .NET
-  repos (`Services/TaskStore.cs`). Check `/tmp/book-in/src-symbols.json` when
-  unsure. 3–9 files; these are what the chapter is about and what
-  chapter-scoped chat attaches. Every name must exist in the index.
+- `files` — bare names relative to the source root, exactly as `codetour.json`
+  spells them (`main.js`, not `src/main.js`). 3–9 files; these are what the
+  chapter is about and what chapter-scoped chat attaches. Every name must exist
+  in the symbols index.
 - `tours` — ids from `codetour.json` whose flows this chapter summarises. May be
   empty. Every id must exist.
 - `ahead` — optional. A forward reference to a later chapter, used when this
   chapter has to mention something that chapter explains. `chapter` must be a
   later chapter's id; `note` is one sentence telling the reader what to expect
-  there. Never point backwards.
+  there. Never point backwards. `ahead.promises` lists the symbols the note
+  defers, in the same reference syntax as prose (`name`, `parent.name`,
+  `file.js:name`); every promise must be a chip in that later chapter, or the
+  build warns and marks this chapter stale. The reader shows each as a chip
+  that jumps to the paragraph covering it.
 - `body` — 3–8 paragraph strings, each ≤ ~90 words. Plain prose. No headings,
   no bullet markup, no code blocks.
+- `fingerprint` — written by the generator's `--write-fingerprints` run (see
+  "Validate before you finish"), never by hand: a hash of the code each
+  reference names, so a later change to that code flags the chapter `drift`.
+
+### The map chapter
+
+The first chapter is always the map — a table of contents for the code: the
+parts, where each starts, and the names you will see, introduced once up front
+so every later mention is a name the reader has already met:
+
+```json
+{
+  "id": "map",
+  "kind": "map",
+  "title": "The names you will meet",
+  "area": null,
+  "files": [],
+  "tours": [],
+  "roles": { "bootApp": "Builds the page once on load and decides which screen shows first." }
+}
+```
+
+It has no `body`. The generator builds it as three levels:
+
+- **Areas** — the `codemap.json` areas in the order chapters first name them
+  (a chapter's `area`), then the rest in codemap order, each with its purpose.
+  Without a codemap, one area per top-level folder.
+- **Front-door files** — each area's files ranked by fan-in (how many other
+  files import it; in csharp, how many name its primary type), then fan-out;
+  the top 3 (`filesPerArea` overrides). Each shows the module's own purpose
+  line (csharp: the comment above its first type).
+- **Names** — each file's top-level names that other files import (any
+  top-level name in csharp), `_`-prefixed ones excluded, ranked by how many
+  other files mention them; the top 3 (`symbolsPerFile` overrides), each a chip
+  beside its role.
+
+Write `roles` for exactly the names `--print-map-candidates` reports, keyed as
+printed (a bare name, or `file:name` when two files' names collide). A file
+printed with "no purpose" may take a role keyed by its path. A ranked name
+without a role, or a role the map doesn't use, is a warning and marks the map
+stale. Each role is one line (≤ ~20 words) saying what the name is for, read
+from its code. When the ranked set changes, the map goes stale and its roles
+are rewritten for the new set. A legacy `limit` is ignored with a warning.
 
 ### References
 
@@ -105,10 +154,7 @@ a tappable chip:
   declared in more than one file, or the generator warns that it is ambiguous.
 - `` `Parent.name` `` — a member under a parent definition (a method on a class
   or object literal).
-- `` `file.js` `` / `` `Folder/File.cs` `` — a file reference; must be a key
-  in the symbols index. On .NET repos a member reference is `` `Type.Member` ``
-  (every member has its type as `parent`), and `` `Folder/File.cs:Member` ``
-  pins the file.
+- `` `file.js` `` — a file reference; must be in the symbols index.
 
 A span that names nothing stays plain text with no warning — so a backticked
 word that is NOT meant as a reference (a CSS class, a localStorage key, a
@@ -116,10 +162,40 @@ table name) is harmless. A span that LOOKS like a file or identifier and does
 not resolve is a warning and marks the chapter stale, and the workflow refuses
 to commit stale chapters. Prefer fewer, correct references over many.
 
+### Rationale — cite it or hedge it
+
+A sentence that says *why* the code is the way it is — one containing
+`because`, `so that`, `in order to`, `the reason` or `which is why` — is the
+sentence a reader trusts most and the one easiest to get fluently wrong. Every
+such sentence must either end with a citation marker or read as inference:
+
+- `[src: file.js:LINE]` — a code comment that states the reason. The line must
+  be a comment line (`//`, `/*`, a leading `*` or `#`; `//`, `///`, `/*` in C#)
+  in a file in the symbols index. Point at the line that says it.
+- `[rule: fragment]` — a fragment of at least 12 characters quoted verbatim
+  from the repo's `CLAUDE.md` ("Source file organization" and "Persistence"
+  carry most architectural whys).
+- `[req: ID]` — a requirement id that appears as a heading or list item in
+  `assignment.md` (only when the repo has one).
+- `[commit: HASH]` — 7–40 hex characters. Accepted but shown as unverified;
+  prefer a comment or rule when one exists.
+- Or a hedge: `appears to`, `seems to`, `presumably`, `likely`, `probably`.
+  Use it when the reason is your reading of the code, not something written
+  down. Never hedge a reason you can cite, and never cite a line that does not
+  say what the sentence claims.
+
+Put the marker at the end of the sentence, before or after its full stop:
+`… because cloud data wins [src: migration.js:185].` The marker is stripped from
+the displayed text; the reader shows a `§` chip for cited reasons and mutes
+inferred ones. A rationale sentence with neither a resolving marker nor a hedge
+is a warning and marks the chapter stale.
+
 ## Chapter order
 
 The book is read top-down, following execution, not bottom-up by dependency:
 
+0. The map chapter comes first (see "The map chapter"). Once it introduces a
+   name, a later chapter that mentions it needs no `ahead` note for it.
 1. Chapter 1 is always how the app starts — the entry point and what it builds
    first. Readers are most lost here and every other chapter hangs off it.
 2. Then the main flows in the order a user meets them, which is the order
@@ -129,7 +205,7 @@ The book is read top-down, following execution, not bottom-up by dependency:
 3. Shared utilities and anything with high fan-in (many importers, few
    imports) come last — readers need to know they exist, not understand them
    before the app.
-4. 8–12 chapters. Below 8 the areas are being crushed together; above 12 the
+4. 8–12 chapters, not counting the map. Below 8 the areas are being crushed together; above 12 the
    read stops being one sitting.
 
 Use `modules[].imports` to check: for each chapter, list the files its `files`
@@ -163,7 +239,11 @@ by design (see CLAUDE.md, "Placeholder text").
 - `stale` (default): run the generator into `/tmp/book-in` and read
   `/tmp/book-in/src-book.json`. Rewrite ONLY chapters whose `stale` is `true`,
   fixing exactly what their `warnings` name (a renamed symbol, a moved file, a
-  dropped tour) and re-reading that code so the prose is still true. Every
+  dropped tour) and re-reading that code so the prose is still true. A
+  `drift: <symbol> body changed` (or `importers changed`) warning means that
+  symbol's code changed while its name still resolves: re-read it and its
+  callers, and rewrite whatever the chapter says about it that is no longer
+  true. Every
   other chapter must come out byte-for-byte identical — do not touch its text,
   its order, or its id. If nothing is stale, change nothing and say so.
   If there is no `codebook.json` at all, `stale` behaves as `all`.
@@ -178,8 +258,15 @@ Run the generator into a scratch directory and read its stderr:
     grep 'Warning: codebook.json' /tmp/book-out.err
 
 Every warning names a chapter and the reference, file, tour or `ahead` that
-failed. Fix the prose or the reference and run again until there are no
-codebook warnings and the `src-book.json written` line reports `0 stale`. If
+failed. Fix the prose or the reference and run again until the only codebook
+warnings left are `drift:` ones on chapters you have re-read and rewritten.
+Then store the fresh code fingerprints — the generator writes each chapter's
+`fingerprint` into `codebook.json` itself; never hand-edit that key:
+
+    MANIFEST_OUT_DIR=/tmp/book-out MANIFEST_DETERMINISTIC=true node scripts/$MANIFEST_VARIANT --write-fingerprints 2>/tmp/book-out.err
+
+and run the validation once more: there must be no codebook warnings and the
+`src-book.json written` line must report `0 stale`. If
 `tests/genSrcManifest.test.js` exists and `node_modules` is installed, also run
 `npx vitest run tests/genSrcManifest.test.js` and make it pass — it asserts the
 committed book's order, sizes and resolution. Never edit the generator or the
