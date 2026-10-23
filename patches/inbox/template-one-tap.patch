@@ -1,0 +1,40 @@
+diff --git a/.github/workflows/onboard.yml b/.github/workflows/onboard.yml
+index 8911816..36b6d36 100644
+--- a/.github/workflows/onboard.yml
++++ b/.github/workflows/onboard.yml
+@@ -223,3 +223,35 @@ jobs:
+             fi
+           done
+           echo "${TARGET_REPO} has no manifest.yml or deploy.yml — nothing to publish."
++
++      # One tap: a refreshed repo that carries the book workflow gets its book
++      # pass started here. No codebook.json yet → scope `all` (write the book);
++      # one exists → scope `stale` (only chapters whose fingerprints drifted, a
++      # no-op when nothing did). The pass commits the chapters, the tours and —
++      # on root-served shapes — the manifest outputs in one commit, so after
++      # this step nothing else needs tapping. The PWA's shelf already shows a
++      # run it did not start (active_runs, workflow: book) as Generating….
++      # Regenerate in the shelf stays the deliberate full rewrite.
++      - name: Start the target's book pass
++        if: ${{ inputs.preflight != 'true' }}
++        env:
++          GH_TOKEN: ${{ secrets.ONBOARD_PAT }}
++          TARGET_REPO: ${{ inputs.target_repo }}
++        run: |
++          if ! gh api "repos/${TARGET_REPO}/contents/.github/workflows/claude-book.yml" --jq .name >/dev/null 2>&1; then
++            echo "${TARGET_REPO} has no claude-book.yml — no book pass to start."
++            exit 0
++          fi
++          # codebook.json sits at the repo root or one level down (the project
++          # folder on nested shapes); the tree listing finds it either way.
++          scope=stale
++          if ! gh api "repos/${TARGET_REPO}/git/trees/main?recursive=1" \
++               --jq '.tree[] | select(.type=="blob") | .path' 2>/dev/null \
++             | grep -Eq '^([^/]+/)?codebook\.json$'; then
++            scope=all
++          fi
++          if gh workflow run claude-book.yml -R "$TARGET_REPO" --ref main -f scope="$scope" 2>/dev/null; then
++            echo "Dispatched claude-book.yml (scope=${scope}) on ${TARGET_REPO}."
++          else
++            echo "Could not dispatch claude-book.yml on ${TARGET_REPO} (not yet indexed by Actions) — tap Generate in the shelf."
++          fi
