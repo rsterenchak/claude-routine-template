@@ -1,0 +1,48 @@
+diff --git a/onboard.sh b/onboard.sh
+index 725cd33..22b6873 100755
+--- a/onboard.sh
++++ b/onboard.sh
+@@ -819,6 +819,27 @@ for f in "${TEMPLATE_FILES[@]}"; do
+     # skip, as before.
+     if [ -n "$PREFLIGHT" ] && [ -n "$RC_LIB" ]; then
+       case "$dest_rel" in
++        .claude/book.md|.github/workflows/*.yml)
++          # book.md carries the same {{WORKING_DIR}} / {{MANIFEST_*}}
++          # placeholders the workflows do, so it is compared on the workflow
++          # tier (rendered with WF_PAIRS), not the prose tier — which never
++          # listed it, so refresh silently skipped it on every repo.
++          wf_src="${f%%>*}"
++          rc_tmp="$(mktemp)"; wf_rt="$(mktemp)"
++          wf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$wf_src" "$rc_tmp")" || wf_canon=""
++          if [ -n "$wf_canon" ]; then
++            rc_render_pairs "$wf_canon" "$wf_rt" "${WF_PAIRS[@]}"
++            case "$dest_rel" in
++              .claude/book.md) wf_n="$(diff "$wf_rt" "$TARGET/$dest_rel" 2>/dev/null | grep -c '^[<>]' || true)" ;;
++              *)               wf_n="$(rc_stripped_diff "$wf_rt" "$TARGET/$dest_rel")" ;;
++            esac
++            if [ "$wf_n" != "0" ]; then
++              wf_le="$(pf_le "$(rc_local_edits_path "$wf_src" "$TARGET/$dest_rel" "$SCRIPT_DIR" "${WF_PAIRS[@]}")")"
++              echo "         ${c_yel}stale${c_rst}  $dest_rel  (${wf_n} lines differ from the template; local edits: ${wf_le})"
++              PF_STALE+=("$(pf_stale_obj "$dest_rel" "$wf_n" "$wf_src" "workflow" "" "$wf_le")")
++            fi
++          fi
++          rm -f "$rc_tmp" "$wf_rt" ;;
+         .claude/*.md)
+           rc_name="${dest_rel#.claude/}"
+           if rc_is_checked "$rc_name"; then
+@@ -1067,6 +1088,15 @@ for f in "${TEMPLATE_FILES[@]}"; do
+     bf_keep() { if [ -n "${ONBOARD_BACKFILL_FORCE:-}" ] && [ -n "$1" ]; then bf_force_src="$(mktemp)"; cp "$1" "$bf_force_src"; fi; }
+     if [ -n "${ONBOARD_BACKFILL_STALE:-}" ] && [ -n "$RC_LIB" ]; then
+       case "$dest_rel" in
++        .claude/book.md)
++          # Same reason as the preflight: book.md is placeholder-filled, so it
++          # backfills on the workflow tier with WF_PAIRS rendered.
++          bf_tmp="$(mktemp)"
++          bf_canon="$(rc_canon_path_any "$SCRIPT_DIR" "$RAW_BASE" "$src_rel" "$bf_tmp")" || bf_canon=""
++          if [ -n "$bf_canon" ]; then
++            bf_res="$(rc_backfill_path "$src_rel" "$bf_canon" "$dest" "$SCRIPT_DIR" "${WF_PAIRS[@]}")"
++          fi
++          bf_keep "$bf_canon"; rm -f "$bf_tmp" ;;
+         .claude/*.md)
+           bf_name="${dest_rel#.claude/}"
+           if rc_is_checked "$bf_name"; then
