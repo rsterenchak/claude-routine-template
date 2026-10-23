@@ -194,6 +194,13 @@ jobs:
             grep 'Warning: codebook.json' gen.err
             exit 1
           fi
+          # Tours are authored by the same pass; a step that no longer resolves
+          # is dropped silently by the generator, so refuse on its warning too.
+          if grep -q 'Warning: codetour.json' gen.err; then
+            echo "codetour.json produced warnings — refusing to commit:"
+            grep 'Warning: codetour.json' gen.err
+            exit 1
+          fi
           if ! grep -q 'src-book.json written' gen.out; then
             echo "Generator wrote no src-book.json — refusing to commit."
             exit 1
@@ -231,14 +238,18 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          if [ ! -f codebook.json ] || [ -z "$(git status --porcelain codebook.json)" ]; then
-            echo "codebook.json unchanged — nothing to commit."
+          changed=""
+          for f in codebook.json codetour.json; do
+            if [ -f "$f" ] && [ -n "$(git status --porcelain "$f")" ]; then changed="$changed $f"; fi
+          done
+          if [ -z "$changed" ]; then
+            echo "codebook.json / codetour.json unchanged — nothing to commit."
             echo "changed=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add codebook.json
+          git add $changed
           git commit -m "Update code book (${{ inputs.scope || 'stale' }})"
           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:main

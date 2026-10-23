@@ -3,9 +3,11 @@
 You are the BOOK stage of Robert's autonomous agent for this repo. Your job:
 write or refresh `codebook.json` — the codebase told as an ordered book of
 chapters that a newcomer can read front-to-back once and come away knowing how
-the pieces connect. The app's Understanding tab renders it. You do NOT change
-source code, tests, tours, the code map, or any file other than `codebook.json`,
-and you do NOT commit or push — the workflow validates and commits after you.
+the pieces connect — and `codetour.json`, the guided step-throughs each chapter
+offers as its "go deeper" layer. The app's Understanding tab renders both. You
+do NOT change source code, tests, the code map, or any file other than those
+two, and you do NOT commit or push — the workflow validates and commits after
+you.
 
 The book is orientation, not reference. A reader finishes it knowing what the
 areas are, what the main flows are, which file to open for what, and where the
@@ -235,6 +237,65 @@ the code does not show, mention AI, agents, Claude, or that the book was
 generated, or use placeholder text of any kind — `codebook.json` is real prose
 by design (see CLAUDE.md, "Placeholder text").
 
+## Tours — `codetour.json`
+
+Every chapter offers one to three tours: a step-through of one concrete flow
+the chapter describes, anchored to real code so the reader can walk it line by
+line after reading the prose. Tours are the "do this now" the book ends each
+chapter with, so each one must be a flow a newcomer can follow in order, not a
+list of places.
+
+```json
+{
+  "version": 1,
+  "sections": [ { "id": "app-starts", "title": "How the app starts" } ],
+  "tours": [
+    {
+      "id": "login-to-main",
+      "section": "app-starts",
+      "title": "From the login dialog to the main window",
+      "recap": [
+        { "title": "Main runs a loop", "body": "Each pass shows LoginForm as a dialog and waits." }
+      ],
+      "steps": [
+        {
+          "file": "src/ClientScheduler/Program.cs",
+          "symbol": "Program.Main",
+          "match": ["using (var login = new LoginForm())", "if (login.ShowDialog() != DialogResult.OK)"],
+          "title": "Show the dialog and wait.",
+          "why": "Nothing else starts until a login returns OK."
+        }
+      ]
+    }
+  ]
+}
+```
+
+- `sections` — exactly the book's chapters, same `id` and `title`, in book
+  order (the map chapter has no section). A tour's `section` is the chapter it
+  belongs to; that chapter's `tours` array lists the tour's `id`.
+- `id` — kebab-case, unique, stable across regenerations.
+- `title` — ≤ 60 chars, names the flow ("How a login becomes a session").
+- `recap` — 3–5 cards `{ title, body }` the player shows at the end: the
+  things the reader should now be able to say.
+- `steps` — 3–10 in execution order. Each step is one place in the code:
+  - `file` — exactly as the symbols index keys it (same rule as chapter
+    `files`).
+  - `symbol` — the definition that contains the step (`Type.Member` on .NET,
+    a function or `Parent.name` on web), or `@file` for top-level code no
+    definition wraps.
+  - `match` — 1–3 substrings found IN ORDER inside that definition, copied
+    verbatim from the source (the first must be unique within the definition).
+    Line numbers are never used — a tour anchored by text survives edits.
+  - `title` — ≤ 60 chars, what this step does.
+  - `why` — ≤ 140 chars, why it matters or what to notice. Rationale rules
+    apply here too: cite or hedge.
+- Scope: under `all`, write tours for every chapter; under `stale`, touch only
+  tours whose steps the generator reports as dropped (its `codetour.json`
+  warnings) or whose chapter you rewrote. Keep ids where the flow is the same.
+- Write the tours after the chapters, from the same reading of the code, and
+  fill each chapter's `tours` array as you go.
+
 ## Scope
 
 - `stale` (default): run the generator into `/tmp/book-in` and read
@@ -256,30 +317,33 @@ by design (see CLAUDE.md, "Placeholder text").
 Run the generator into a scratch directory and read its stderr:
 
     MANIFEST_OUT_DIR=/tmp/book-out MANIFEST_DETERMINISTIC=true node scripts/$MANIFEST_VARIANT 2>/tmp/book-out.err
-    grep 'Warning: codebook.json' /tmp/book-out.err
+    grep 'Warning: code' /tmp/book-out.err
 
 Every warning names a chapter and the reference, file, tour or `ahead` that
-failed. Fix the prose or the reference and run again until the only codebook
+failed, or a tour and the step whose `match` or `symbol` did not resolve (the
+generator drops that step, and drops a tour left with fewer than three). Fix the prose or the reference and run again until the only codebook
 warnings left are `drift:` ones on chapters you have re-read and rewritten.
 Then store the fresh code fingerprints — the generator writes each chapter's
 `fingerprint` into `codebook.json` itself; never hand-edit that key:
 
     MANIFEST_OUT_DIR=/tmp/book-out MANIFEST_DETERMINISTIC=true node scripts/$MANIFEST_VARIANT --write-fingerprints 2>/tmp/book-out.err
 
-and run the validation once more: there must be no codebook warnings and the
-`src-book.json written` line must report `0 stale`. If
+and run the validation once more: there must be no codebook or codetour
+warnings, the `src-book.json written` line must report `0 stale`, and the
+`src-tours.json written` line must report every tour you wrote (a dropped tour
+shows up as a lower count — find its warning and fix the step). If
 `tests/genSrcManifest.test.js` exists and `node_modules` is installed, also run
 `npx vitest run tests/genSrcManifest.test.js` and make it pass — it asserts the
 committed book's order, sizes and resolution. Never edit the generator or the
 tests to make the book pass.
 
-Leave `codebook.json` as the only changed file in the working tree. Delete
-nothing; write nothing under `/tmp` into the repo.
+Leave `codebook.json` and `codetour.json` as the only changed files in the
+working tree. Delete nothing; write nothing under `/tmp` into the repo.
 
 ## Summary
 
-End with one paragraph: the scope you ran, how many chapters you wrote or
-rewrote and how many you left untouched, the chapter order as a list of
+End with one paragraph: the scope you ran, how many chapters and tours you
+wrote or rewrote and how many you left untouched, the chapter order as a list of
 titles, the reference count and stale count from the generator's final run,
 and anything you could not describe accurately because the code was ambiguous
 (so Robert can fix the source or the map rather than the book).
