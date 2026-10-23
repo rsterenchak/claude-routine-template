@@ -1,0 +1,35 @@
+diff --git a/.github/workflows/onboard.yml b/.github/workflows/onboard.yml
+index 36b6d36..79bd7df 100644
+--- a/.github/workflows/onboard.yml
++++ b/.github/workflows/onboard.yml
+@@ -214,6 +214,11 @@ jobs:
+         run: |
+           for wf in manifest.yml deploy.yml; do
+             if gh api "repos/${TARGET_REPO}/contents/.github/workflows/${wf}" --jq .name >/dev/null 2>&1; then
++              for i in $(seq 1 12); do
++                if gh api "repos/${TARGET_REPO}/actions/workflows" --jq '.workflows[].path' 2>/dev/null | grep -q "${wf}"; then break; fi
++                echo "${wf} not yet indexed by Actions (${i}/12) — waiting 5s."
++                sleep 5
++              done
+               if gh workflow run "$wf" -R "$TARGET_REPO" --ref main 2>/dev/null; then
+                 echo "Dispatched ${wf} on ${TARGET_REPO}."
+               else
+@@ -250,8 +255,17 @@ jobs:
+              | grep -Eq '^([^/]+/)?codebook\.json$'; then
+             scope=all
+           fi
++          # A workflow file this run just CREATED is not dispatchable until the
++          # Actions index picks it up (seconds, asynchronously after the push).
++          # Wait for it to be listed before dispatching, rather than failing on
++          # the first refresh of every new repo — the exact case this is for.
++          for i in $(seq 1 12); do
++            if gh api "repos/${TARGET_REPO}/actions/workflows" --jq '.workflows[].path' 2>/dev/null | grep -q 'claude-book.yml'; then break; fi
++            echo "claude-book.yml not yet indexed by Actions (${i}/12) — waiting 5s."
++            sleep 5
++          done
+           if gh workflow run claude-book.yml -R "$TARGET_REPO" --ref main -f scope="$scope" 2>/dev/null; then
+             echo "Dispatched claude-book.yml (scope=${scope}) on ${TARGET_REPO}."
+           else
+-            echo "Could not dispatch claude-book.yml on ${TARGET_REPO} (not yet indexed by Actions) — tap Generate in the shelf."
++            echo "Could not dispatch claude-book.yml on ${TARGET_REPO} after waiting — tap Generate in the shelf."
+           fi
