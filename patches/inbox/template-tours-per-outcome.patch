@@ -1,0 +1,44 @@
+diff --git a/.claude/book.md b/.claude/book.md
+index 56df5fb..fe1c3bf 100644
+--- a/.claude/book.md
++++ b/.claude/book.md
+@@ -239,12 +239,27 @@ by design (see CLAUDE.md, "Placeholder text").
+ 
+ ## Tours — `codetour.json`
+ 
+-Every chapter offers one to three tours: a step-through of one concrete flow
++Every chapter offers one to four tours: a step-through of one concrete flow
+ the chapter describes, anchored to real code so the reader can walk it line by
+ line after reading the prose. Tours are the "do this now" the book ends each
+ chapter with, so each one must be a flow a newcomer can follow in order, not a
+ list of places.
+ 
++**One tour per outcome, not one per chapter.** Before writing a chapter's
++tours, list the outcomes of its main flow — the branches a real user can end
++up on — and write a tour for each outcome that has its own code path. A login
++chapter is not one tour "from the dialog to the main window"; it is "logging in
++and reaching the main window", "exiting from the login dialog" and "logging
++out and coming back to the dialog", because a reader who only walks the happy
++path will assume the other branches work like it (the first SE2 book had
++exactly this gap: a reader took the exit branch for a retry). Name each tour
++by its outcome. Branches that share code with the happy path except for one
++decision still get their own short tour when the decision is where a newcomer
++would be wrong; a branch that is one line and self-explanatory can instead be
++a single step with a `why` that names it inside the happy-path tour. Retries
++that happen inside a dialog or a loop belong to the tour of the code that
++loops, not to the caller's tour — say where the retry lives.
++
+ ```json
+ {
+   "version": 1,
+@@ -278,7 +293,9 @@ list of places.
+ - `title` — ≤ 60 chars, names the flow ("How a login becomes a session").
+ - `recap` — 3–5 cards `{ title, body }` the player shows at the end: the
+   things the reader should now be able to say.
+-- `steps` — 3–10 in execution order. Each step is one place in the code:
++- `steps` — 3–10 in execution order, and the tour's first `why` says which
++  outcome this tour follows and what the reader would see on screen. Each step
++  is one place in the code:
+   - `file` — exactly as the symbols index keys it (same rule as chapter
+     `files`).
+   - `symbol` — the definition that contains the step (`Type.Member` on .NET,
