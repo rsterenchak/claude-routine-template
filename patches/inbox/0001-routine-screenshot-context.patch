@@ -1,0 +1,178 @@
+From 20d674f8d0cf86d5a598880d1968feceefb36b89 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 00:03:47 -0700
+Subject: [PATCH] routine: Screenshot: line on entries; derive reads image
+ mockups
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- routine-base.md: Screenshot: sub-bullet documented in <todo_format>, opened
+  with the Read tool in <implementation> step 2, deleted in the completion
+  commit (<git_workflow> step 3).
+- derive.md / project-derive.md: drop the 'cannot read images' rule — the Read
+  tool renders images (visual verification already relies on it); a sibling
+  README spec still wins where it and the picture differ.
+- mockups-README.md / README.md: same, plus the docs/context/ convention.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017sezPaFHNzfgY6DRNQqvQE
+---
+ .claude/derive.md         | 28 +++++++++++++++++-----------
+ .claude/project-derive.md |  9 ++++++---
+ .claude/routine-base.md   |  4 +++-
+ README.md                 |  1 +
+ mockups-README.md         | 30 ++++++++++++++++++++++--------
+ 5 files changed, 49 insertions(+), 23 deletions(-)
+
+diff --git a/.claude/derive.md b/.claude/derive.md
+index 50e9d9f..05af778 100644
+--- a/.claude/derive.md
++++ b/.claude/derive.md
+@@ -73,15 +73,20 @@ read depends on the file:
+ - **Prose — a `.md` spec** — read it directly and treat it as authoritative. This
+   is the richest case: a written spec states the region contents, ordering, and
+   per-page inventory in a form a proposal can be built from without inference.
+-- **An image — `.png`, `.jpg`** — you cannot read it. Look for a written spec
+-  beside it (a `README.md` in the same folder is the convention) and read that
+-  instead. Coursework wireframes are frequently images because the PA required
+-  them that way, and the sibling spec is what makes them actionable.
+-
+-An image with no sibling spec is not a usable design. Say so in the proposal's
+-description and keep the entry to structure rather than layout — do not guess at
+-what the picture shows. If a referenced path doesn't resolve at all, treat it the
+-same way.
++- **An image — `.png`, `.jpg`, `.webp`** — open it with the Read tool, which
++  renders images, and read it as a wireframe: the regions, their order, what
++  sits in each. Then look for a written spec beside it (a `README.md` in the
++  same folder is the convention) and read that too when it exists — prose
++  states intent and DOM order a picture only implies, so where the two
++  disagree the prose wins. Coursework wireframes are frequently images because
++  the PA required them that way; the picture is usable on its own, and the
++  sibling spec sharpens it.
++
++Describe only what the image actually shows. Where it leaves a region's contents
++or behavior open, keep that part of the entry to structure rather than invented
++layout, and say in the description what the picture settled and what it left
++open. If a referenced path doesn't resolve at all, say so in the proposal's
++description and keep the entry to structure.
+ 
+ ## Step 2 — read what already exists
+ 
+@@ -319,8 +324,9 @@ Rules:
+   against what the repo's stack already supplies. And look before you park:
+   `## Mockups`, then the rest of the brief, then the checkout's design folder.
+   Park only what is genuinely open after all three.
+-- Never guess at an image. A `.png` wireframe is opaque; read its sibling spec or
+-  treat the design as absent.
++- Never guess past an image. Read a `.png` wireframe with the Read tool and
++  propose only what it shows (plus its sibling spec, which wins where they
++  differ); an unresolvable path is an absent design.
+ - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
+   A `needs_words` question is not coverage: re-read its requirement and propose if
+   the spec now answers it, rather than skipping the aspect forever. Nor is a
+diff --git a/.claude/project-derive.md b/.claude/project-derive.md
+index b2f7e91..8b03928 100644
+--- a/.claude/project-derive.md
++++ b/.claude/project-derive.md
+@@ -71,9 +71,12 @@ say so in the closing summary.
+ 
+ **Read any mockups referenced from Surfaces.** A path like
+ `docs/mockups/session-screen.html` is a committed design decision — read the file
+-and let it constrain the proposal for that surface. If a referenced mockup does
+-not exist, do not invent its design: say so in the proposal's description and keep
+-the entry to structure rather than layout.
++and let it constrain the proposal for that surface. An image mockup (`.png`,
++`.jpg`, `.webp`) is read the same way: the Read tool renders images, so open it
++and take its regions and their order as the design; a `README.md` beside it, when
++one exists, states intent the picture only implies and wins where they differ.
++If a referenced mockup does not exist, do not invent its design: say so in the
++proposal's description and keep the entry to structure rather than layout.
+ 
+ ## Step 2 — read what already exists
+ 
+diff --git a/.claude/routine-base.md b/.claude/routine-base.md
+index 92c648a..98bd6f3 100644
+--- a/.claude/routine-base.md
++++ b/.claude/routine-base.md
+@@ -37,6 +37,7 @@ Parsing rules:
+ - A task's **type** comes from its `Type:` sub-bullet. The value MUST be either `bug` or `feature` (case-insensitive, leading/trailing whitespace tolerated). If the line is missing, malformed, or contains anything else, the task is INELIGIBLE for this run — skip it and continue down the list. Do not guess type from the title, description, or any other heuristic.
+ - A task's **priority** comes from a `**[HIGH]**`, `**[MEDIUM]**`, or `**[LOW]**` marker on the task line. If absent, default to MEDIUM.
+ - A task MAY carry an optional `Verify:` sub-bullet listing viewports and routes to render after the change (`Verify: 1300x900, 1300x700 → /, /play`). It is NOT part of eligibility; its meaning is defined in <visual_verification>.
++- A task MAY carry an optional `Screenshot:` sub-bullet naming ONE repo-relative image committed as context for this task (`Screenshot: docs/context/<id>.jpg` — the app commits it beside TODO.md when the entry is injected). It is NOT part of eligibility; its meaning is defined in <implementation> step 2 and <git_workflow> step 3.
+ - A task MAY carry an optional `Style:` sub-bullet. It is NOT part of eligibility — a task with no `Style:` line, or an unrecognised value, is fully eligible and simply carries no style mode. Its meaning is defined by `.claude/style.md` in repos that have one; where no style doc exists the line has no effect. NEVER infer a style mode from the title or description, and never treat a malformed `Style:` line as a reason to skip a task — report it in the PR body and proceed without it.
+ - A task's **title** is the task line with `- [ ]` and the priority marker stripped.
+ - Indented bullets beneath a task (Type, Description, File, etc.) belong to that task and must be read as implementation context — do not treat them as separate tasks.
+@@ -65,7 +66,7 @@ Exit states:
+ 
+ <implementation>
+ 1. Read the selected task fully, including all indented context bullets.
+-2. Read every file the task references, plus any obvious neighbors (tests, types, config) needed to understand the change.
++2. Read every file the task references, plus any obvious neighbors (tests, types, config) needed to understand the change. If the task carries a `Screenshot:` line, open that image with the Read tool — it renders images — BEFORE writing code, and treat it as part of the Description: for `Type: bug` it shows the broken state (what <visual_verification> must confirm is gone); for `Type: feature` it shows the region or the intended result. The Description still governs scope — the picture clarifies, it never adds work. If the path does not resolve, say so under **Notes** in the PR body and proceed from the Description alone.
+ 3. Match the repo's existing language, framework, style, and patterns. Do not introduce new languages, dependencies, or tools unless the task explicitly calls for them. Then check `.claude/` for style documentation and READ WHATEVER IS THERE before writing any code — typically `.claude/style.md` (naming, structure, and the shape of a class or module) and `.claude/commenting-style.md` (how comments are written). These files exist only in repos that carry them; when absent, skip this and rely on the surrounding code, which is the normal case. Where a style doc and the surrounding code disagree, the doc wins — it describes what the code should converge on, which matters most in a young repo whose existing code is thin. A style doc governs STRUCTURE AND NAMING ONLY and never licenses a defect: correctness, the test suite, and this file's constraints all outrank it, and any conflict is reported in the PR body rather than resolved by guessing.
+ 4. Keep the change scoped strictly to the task. Do NOT refactor, reformat, or fix unrelated issues, even if you spot them. Do NOT append them to TODO.md either: an appended entry is indistinguishable from one a human wrote, so the next `backlog` run selects and executes it without anyone having agreed to it — the routine would be enqueueing its own work. Instead, report the observation in the PR body under **Notes** AND in your closing summary, so it reaches the human who decides whether it becomes a task. Describe each in a sentence: what you saw, where, and why it is out of scope for this task. The scoped change includes any project bookkeeping update described in <post_task_bookkeeping>.
+ 5. Add or update tests when the task is a bug fix or a feature with testable behavior. For bug fixes (Type: bug), write the regression test first, confirm it fails against the current code, then implement the fix and confirm it passes. For features (Type: feature), add tests that cover the new behavior's invariants.
+@@ -154,6 +155,7 @@ Procedure:
+      `[Claude] chore: mark task complete in TODO.md`
+    (The PR number won't be known yet; either commit with a placeholder and amend after the PR is opened, or omit the PR reference — the completion date alone is sufficient.)
+    This is the ONLY edit a run may make to TODO.md. Never append a new entry (see <implementation> step 4).
++   If the completed task carried a `Screenshot:` line, `git rm` that file in this same commit — it was context for this one task and is stale the moment the task ships (the same rule `mockups-README.md` applies to mockups). Delete only the file the entry names, never anything else under `docs/context/`.
+ 
+ 4. Before pushing, re-sync the branch with the latest <BASE_BRANCH> so the PR merges cleanly even if main moved during this run:
+    a. `git fetch origin <BASE_BRANCH>`.
+diff --git a/README.md b/README.md
+index 71805d8..7cebb68 100644
+--- a/README.md
++++ b/README.md
+@@ -232,6 +232,7 @@ Delete or replace `README.md` with your project's docs. Also delete `ONBOARD.md`
+   Offboard deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force` overrides.
+ 
+ - **Visual verification** — a run that changes a presentational file (CSS, HTML, JSX, …), or whose entry carries a `Verify:` line, renders the result before opening the PR and the agent *looks at it*: `claude-run.yml` installs Chromium on Node shapes, the routine builds, serves the project with the preview command in `.claude/routine.md`, screenshots each viewport × route with Playwright's CLI, reads the PNGs and judges them against the entry — a failed shot is a failed test. The shots are attached to the run as the `verify-screenshots` artifact and the PR body carries a **Visual** verdict. Entry syntax: `- Verify: 1300x900, 1300x700 → /, /play`, with optional `;`-separated steps after a route for states behind an interaction (`- Verify: 920x600 → / ; click "Fight" ; wait 1500` — `click`, `type`, `press`, `wait`, `hover`, `scroll`; targets are `"visible text"` or selectors), executed by `scripts/render-check.mjs`, which onboard places beside the manifest generator; with no line, a presentational change renders `1300x900`, `1300x700`, `820x600` and `390x844` on `/`. Repos onboarded before this exists lack the preview section in `routine.md`; the routine derives the command from the shape until you add it (`vite preview` for Vite repos, python's static server otherwise).
++- **Entry screenshots** — an entry may carry one image as context for the run that ships it: `- Screenshot: docs/context/<entry id>.jpg`. The app commits the file beside `TODO.md` when the entry is injected (the Worker's `inject` route takes it as `screenshot: { media_type, data }`), the routine opens it with the Read tool before writing code (<implementation> step 2 in `routine-base.md`), and the completion commit deletes it. The derive passes read image mockups the same way, so a `.png` wireframe referenced from `## Mockups` or `project.md` is a usable design on its own; a sibling `README.md` spec still wins where the two differ. See `mockups-README.md`.
+ 
+ ---
+ 
+diff --git a/mockups-README.md b/mockups-README.md
+index dc07808..411133f 100644
+--- a/mockups-README.md
++++ b/mockups-README.md
+@@ -14,14 +14,28 @@ mockup" verifiable instead of remembered.
+ you're free to choose — it renders in a browser, in the app's code viewer, and
+ reads as text to an agent. SVG works the same way.
+ 
+-**When the design has to be an image, write the spec beside it.** Coursework
+-wireframes are often a graded deliverable submitted as PNGs, and that isn't
+-negotiable. A run cannot read a PNG. So commit a `README.md` in the same folder
+-carrying what the picture shows in prose — the regions and their DOM order, the
+-page inventory, what belongs in each region, which requirement each part answers
+-— and reference THAT file from the brief, not the image. The image stays as the
+-visual check; the prose is what the work is built from. This is strictly better
+-than markup alone, because prose can state intent a wireframe only implies.
++**When the design has to be an image, consider writing the spec beside it.**
++Coursework wireframes are often a graded deliverable submitted as PNGs, and that
++isn't negotiable. A run and the derive pass CAN read a PNG — the Read tool renders
++images — so an image on its own is a usable design and can be referenced from the
++brief directly. A `README.md` in the same folder carrying what the picture shows
++in prose — the regions and their DOM order, the page inventory, what belongs in
++each region, which requirement each part answers — still earns its place when the
++surface is more than a layout: prose states intent and ordering a wireframe only
++implies, and the passes treat it as authoritative where it and the picture
++differ. Reference the prose file from the brief when it exists, the image when it
++doesn't.
++
++## Entry screenshots — `docs/context/`
++
++Separate from mockups: a TODO.md entry may carry one screenshot as context for
++the run that ships it — the broken state for a bug, the region for a feature.
++The app commits it at `docs/context/<entry id>.<ext>` beside TODO.md when the
++entry is injected, and the entry's `- Screenshot:` line names that path. The run
++opens it with the Read tool before writing code, and the commit that marks the
++entry complete deletes it. Nothing here is a design decision; it is throwaway
++context with the lifetime of one entry, and nothing should reference it except
++the entry it belongs to.
+ 
+ **One file per surface**, named for the surface: `queue-rail.html`,
+ `onboard-modal.html`. The brief references these by path — `project.md`'s
+-- 
+2.43.0
+
