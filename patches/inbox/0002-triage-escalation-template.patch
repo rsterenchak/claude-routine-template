@@ -1,0 +1,280 @@
+From d375620b2d03a3b251f9824abe31912e86773a34 Mon Sep 17 00:00:00 2001
+From: claude <noreply@anthropic.com>
+Date: Tue, 27 Oct 2026 01:50:11 -0700
+Subject: [PATCH] triage: escalated verdict + scoped escalation pass
+
+- triage.md: a sweep may mark a clear-intent row 'escalated' with its
+  findings when the source doesn't yield a confident root cause; an
+  escalation pass (ESCALATION_ROW_IDS set) is scoped to those rows, starts
+  from the thread, may not escalate again, and bounds its reads.
+- claude-triage.yml: escalation/row_ids inputs, scoped snapshot, the
+  env var for the agent, and an Escalate step after the reap that flips
+  escalated rows to triaging and calls the Worker's escalate_triage
+  (failing them visibly if the Worker is missing or refuses).
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017sezPaFHNzfgY6DRNQqvQE
+---
+ .claude/triage.md                   | 61 +++++++++++++++---
+ .github/workflows/claude-triage.yml | 98 ++++++++++++++++++++++++++++-
+ README.md                           |  1 +
+ 3 files changed, 149 insertions(+), 11 deletions(-)
+
+diff --git a/.claude/triage.md b/.claude/triage.md
+index e8773ae..4bee346 100644
+--- a/.claude/triage.md
++++ b/.claude/triage.md
+@@ -56,6 +56,14 @@ curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.tr
+   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
+ ```
+ 
++**Escalation pass.** When the `ESCALATION_ROW_IDS` environment variable is set
++(a comma-separated list of row ids), this run is the SECOND, scoped pass over
++rows an earlier sweep marked `escalated` — see <escalation> below. Append
++`&id=in.(<ids>)` to the Step 1 query so you read exactly those rows and nothing
++else, and treat the last `role:'agent'` message in each row's `thread` as the
++first pass's findings: the files it opened, what it ruled out, its hypotheses.
++Start from those files, not from a fresh Grep of the repo.
++
+ Each row's `context` holds `{ title, description }` — the task text, denormalized
+ at flag time, so you don't need the `todos` table. If the list is empty, write no
+ verdicts and go straight to the closing summary.
+@@ -92,11 +100,40 @@ files) enough to root-cause it, then assign exactly ONE verdict:
+   Produce a full TODO.md entry (format below) and put it in `draft`, plus the
+   declared file paths in `file_paths`.
+ 
++- **`escalated`** — the task is clear dev work (you know what Robert wants), you
++  have READ the owning source, and you still cannot root-cause it with
++  confidence: the defect doesn't reproduce from the code you can see, the fix
++  would touch a flow you can't trace end to end, or two plausible causes remain
++  and the source doesn't settle which. Do NOT ask Robert — he can't read the
++  code for you. Write `escalated` with a thread message that hands the next pass
++  a warm start: the files you opened (repo-relative paths), what you ruled out
++  and why, and your ranked hypotheses. A second, scoped run on a stronger model
++  picks the row up from that message. `escalated` is NOT for ambiguity about
++  intent — that stays `needs_words` — and it is never available in an
++  escalation pass (see <escalation>).
++
+ **Downgrade rather than guess.** If you can't confidently root-cause a task with a
+-reasonable read of the source, do NOT draft on a hunch — set it to `needs_words`
+-with a precise question. A wrong draft is worse than a question. (Deep root-cause
+-that a fast pass can't crack is where Opus escalation will eventually plug in;
+-until then, `needs_words` is the safe exit.)
++reasonable read of the source, do NOT draft on a hunch. Pick the exit by what is
++missing: if the gap is *what Robert wants*, `needs_words` with a precise question;
++if the gap is *what the code does*, `escalated` with your findings. A wrong draft
++is worse than either.
++
++<escalation>
++An escalation pass (`ESCALATION_ROW_IDS` set) resolves rows the sweep handed
++over. Rules that differ from a sweep:
++
++- Read the thread's findings first and open the files it names BEFORE any wider
++  search. Widen only when those files don't settle it; say in the thread message
++  what the first pass missed.
++- `escalated` is NOT a verdict here. Every row ends as `drafted`, `needs_mockup`,
++  or `needs_words`. If even this pass can't root-cause it, write `needs_words`
++  with a question that names what you traced and exactly which fact would
++  settle it — that question is the only thing that should reach Robert.
++- Append your message after the first pass's in `thread`; never overwrite it.
++- Cost discipline is stricter: Grep with line numbers and Read with
++  `offset`/`limit`; never read a whole file over ~300 lines. You are the
++  expensive pass — spend turns on the hard part, not on re-deriving the sweep.
++</escalation>
+ 
+ ## Step 3 — write the verdict back
+ 
+@@ -123,6 +160,10 @@ history. Use an ISO timestamp for `ts`.
+   (preserve the existing `title`/`description` in `context`; add the visual fields, including the raw `markup`/`css` source slices)
+ - `drafted`:
+   `{"state":"drafted","draft":"<full TODO.md entry>","file_paths":["{{SRC_DIR}}...","..."],"thread":[{"role":"agent","text":"Drafted — ready to dispatch.","ts":"<now>"}]}`
++- `escalated` (sweep only, never in an escalation pass):
++  `{"state":"escalated","thread":[{"role":"agent","text":"Escalated for a deeper pass. Read: <paths>. Ruled out: <what, why>. Hypotheses: 1) … 2) …","ts":"<now>"}]}`
++  (the workflow flips the row back to `triaging` and dispatches the scoped pass
++  after this run ends — you do nothing else for it)
+ 
+ `file_paths` MUST match the paths inside the drafted entry — they drive the
+ serialize check and the post-run diff guard downstream, so getting them right
+@@ -184,14 +225,18 @@ Rules:
+ - If a curl fails, note it and continue to the next task — don't abort the sweep.
+ - No delegation and no deferral. You are the only actor in this run (see above);
+   do every read and every PATCH yourself, in this turn.
+-- Every row read in Step 1 must reach a terminal verdict (`needs_words`,
+-  `needs_mockup`, or `drafted`) before you write the summary. Step 4 is the check.
++- Every row read in Step 1 must reach a verdict (`needs_words`, `needs_mockup`,
++  `drafted`, or — in a sweep only — `escalated`) before you write the summary.
++  Step 4 is the check.
++- Never write `escalated` in an escalation pass (`ESCALATION_ROW_IDS` set): a row
++  escalates once. Never write it for a row whose gap is intent rather than code.
+ 
+ ## Closing summary
+ 
+ End with ONE paragraph naming what you did per task — how many flagged, and for
+-each: the verdict and a one-line why, citing the specific file(s) you read. If
+-nothing was flagged, say so. State both counts explicitly: rows read in Step 1 and
++each: the verdict and a one-line why, citing the specific file(s) you read. Name
++every `escalated` row and what it is escalated on; in an escalation pass, say so
++and name what the first pass missed. If nothing was flagged, say so. State both counts explicitly: rows read in Step 1 and
+ verdicts written. They MUST match — if they don't, you skipped Step 4, so go back
+ and finish it before summarising. Never write a summary that describes work as
+ still in flight; by the time you write this paragraph the sweep is over. (This
+diff --git a/.github/workflows/claude-triage.yml b/.github/workflows/claude-triage.yml
+index 5b05be5..88af8f5 100644
+--- a/.github/workflows/claude-triage.yml
++++ b/.github/workflows/claude-triage.yml
+@@ -4,7 +4,7 @@ name: Claude triage
+ # name (workflow_dispatch returns no run id — same trick as claude-run.yml).
+ # project_id scopes the sweep to one project's flagged tasks: the agent is
+ # per-project for now.
+-run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }} · ${{ inputs.model || 'default' }}
++run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }} · ${{ inputs.model || 'default' }}${{ inputs.escalation == 'true' && ' · escalation' || '' }}
+ 
+ on:
+   workflow_dispatch:
+@@ -21,6 +21,18 @@ on:
+         description: resolved model id (empty = workflow default); kimi-*/deepseek-* reroute via the Worker gateway
+         type: string
+         required: false
++      # Escalation pass: set by the Worker's escalate_triage route, which the
++      # sweep's own "Escalate" step below calls for rows it marked `escalated`.
++      # The run is then scoped to exactly row_ids (see .claude/triage.md
++      # <escalation>), and the Escalate step is skipped so a row escalates once.
++      escalation:
++        description: set to true for the scoped second pass over row_ids
++        type: string
++        required: false
++      row_ids:
++        description: comma-separated agent_queue ids the escalation pass is scoped to
++        type: string
++        required: false
+   # Optional self-sweep — uncomment to have the agent wake on a schedule and
+   # process any triaging rows with no explicit dispatch. Min interval 5 min;
+   # GitHub delays/skips scheduled runs under load and disables them after 60
+@@ -114,11 +126,19 @@ jobs:
+           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+           PROJECT_ID: ${{ inputs.project_id }}
++          ESCALATION: ${{ inputs.escalation }}
++          ROW_IDS: ${{ inputs.row_ids }}
+         run: |
+           set +e
+           SNAP="$RUNNER_TEMP/triage-snapshot.txt"
+           : > "$SNAP"
+-          curl -s "${SUPABASE_URL%/}/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id" \
++          # An escalation pass owns only its row ids; a sweep owns every
++          # triaging row of the project.
++          FILTER=""
++          if [ "$ESCALATION" = "true" ] && [ -n "$ROW_IDS" ]; then
++            FILTER="&id=in.($ROW_IDS)"
++          fi
++          curl -s "${SUPABASE_URL%/}/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id$FILTER" \
+             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+             | jq -r '.[]?.id // empty' > "$SNAP" 2>/dev/null
+@@ -133,6 +153,9 @@ jobs:
+           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+           PROJECT_ID: ${{ inputs.project_id }}
++          # Set only on the scoped second pass; .claude/triage.md <escalation>
++          # keys its behaviour (Step 1 filter, no `escalated` verdict) off it.
++          ESCALATION_ROW_IDS: ${{ inputs.escalation == 'true' && inputs.row_ids || '' }}
+         with:
+           # Subscription auth (Pro/Max) — the SAME plan-billed path as
+           # claude-run.yml, NOT anthropic_api_key. This is what puts triage on
+@@ -164,7 +187,9 @@ jobs:
+             Project id to sweep: ${{ inputs.project_id }}
+ 
+             Read `.claude/triage.md` from the repository and execute it exactly as
+-            written, for the project id above. It defines how to read the flagged
++            written, for the project id above. If the ESCALATION_ROW_IDS environment
++            variable is set, this is an ESCALATION PASS scoped to those rows — follow
++            the <escalation> section of triage.md. It defines how to read the flagged
+             tasks from Supabase, classify each against the real source in this
+             checkout, and write the verdict back to Supabase. Complete the whole
+             sweep, then exit with the one-paragraph summary the routine specifies.
+@@ -219,3 +244,70 @@ jobs:
+             echo "Reap: $ID triaging → failed (HTTP $CODE)"
+           done < "$SNAP"
+           exit 0
++
++      # Hand rows the sweep marked `escalated` to the scoped second pass. Runs
++      # AFTER the reap so the rows it flips back to `triaging` are never in the
++      # reap's path, and only on a sweep (an escalation pass may not escalate
++      # again). Order: flip to `triaging` first so the app keeps showing
++      # Generating… and the queued pass finds them in its Step 1; then ask the
++      # Worker to dispatch (escalate_triage resolves the `escalate` surface model
++      # — Fable by default — and re-dispatches this workflow with row_ids). The
++      # new run queues behind this one on the concurrency group, which is what
++      # the app's sweep tracker waits for before it would reap anything. If the
++      # Worker is unreachable or refuses, flip the rows to `failed` with a
++      # reason so they surface as STUCK + Retry triage instead of sitting at
++      # an unknown state. Never fails the job.
++      - name: Escalate unresolved rows
++        if: always() && inputs.escalation != 'true'
++        env:
++          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
++          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
++          PROJECT_ID: ${{ inputs.project_id }}
++          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
++          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
++          CORRELATION_ID: ${{ inputs.correlation_id }}
++        run: |
++          set +e
++          BASE="${SUPABASE_URL%/}/rest/v1/agent_queue"
++          IDS=$(curl -s "$BASE?project_id=eq.$PROJECT_ID&state=eq.escalated&select=id" \
++            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
++            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
++            | jq -r '[.[]?.id // empty] | join(",")' 2>/dev/null)
++          if [ -z "$IDS" ]; then
++            echo "Escalate: no escalated rows — nothing to do."
++            exit 0
++          fi
++          echo "Escalate: $IDS"
++          patch_rows() {
++            curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE?id=in.($IDS)" \
++              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
++              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
++              -H "Content-Type: application/json" \
++              -H "Prefer: return=minimal" \
++              -d "$1"
++          }
++          fail_rows() {
++            CODE=$(patch_rows "$(jq -cn --arg r "$1" '{state:"failed",failure_reason:$r}')")
++            echo "Escalate: rows → failed (HTTP $CODE): $1"
++          }
++          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
++            fail_rows 'Escalation needs the Worker (TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing). Use Retry triage to run the sweep again.'
++            exit 0
++          fi
++          CODE=$(patch_rows '{"state":"triaging"}')
++          echo "Escalate: rows → triaging (HTTP $CODE)"
++          ROW_JSON=$(printf '%s' "$IDS" | jq -R -c 'split(",")')
++          RESP=$(curl -s -w '\n%{http_code}' -X POST "${INJECTOR_URL%/}" \
++            -H "Authorization: Bearer $INJECTOR_SECRET" \
++            -H "Content-Type: application/json" \
++            -d "$(jq -cn --arg repo "$GITHUB_REPOSITORY" --arg pid "$PROJECT_ID" --arg corr "${CORRELATION_ID}-esc" --argjson ids "$ROW_JSON" \
++                  '{escalate_triage:true, repo:$repo, project_id:$pid, correlation_id:$corr, row_ids:$ids}')")
++          HTTP=$(printf '%s' "$RESP" | tail -n1)
++          BODY=$(printf '%s' "$RESP" | sed '$d')
++          if [ "$HTTP" != "200" ]; then
++            echo "Escalate: Worker refused (HTTP $HTTP): $BODY"
++            fail_rows "Escalation dispatch failed (HTTP $HTTP). Use Retry triage to run the sweep again."
++            exit 0
++          fi
++          echo "Escalate: dispatched — $BODY"
++          exit 0
+diff --git a/README.md b/README.md
+index 7cebb68..d5fa0eb 100644
+--- a/README.md
++++ b/README.md
+@@ -232,6 +232,7 @@ Delete or replace `README.md` with your project's docs. Also delete `ONBOARD.md`
+   Offboard deletes the managed files, the six repo secrets and the `inject_targets` row; keeps the authored files, Pages and workflow permissions, so a deployed site keeps serving. `purge` deletes the authored files too. A managed file is deleted only when it provably **is** a template revision — a `deploy.yml` you wrote before onboarding is held and listed; `force` overrides.
+ 
+ - **Visual verification** — a run that changes a presentational file (CSS, HTML, JSX, …), or whose entry carries a `Verify:` line, renders the result before opening the PR and the agent *looks at it*: `claude-run.yml` installs Chromium on Node shapes, the routine builds, serves the project with the preview command in `.claude/routine.md`, screenshots each viewport × route with Playwright's CLI, reads the PNGs and judges them against the entry — a failed shot is a failed test. The shots are attached to the run as the `verify-screenshots` artifact and the PR body carries a **Visual** verdict. Entry syntax: `- Verify: 1300x900, 1300x700 → /, /play`, with optional `;`-separated steps after a route for states behind an interaction (`- Verify: 920x600 → / ; click "Fight" ; wait 1500` — `click`, `type`, `press`, `wait`, `hover`, `scroll`; targets are `"visible text"` or selectors), executed by `scripts/render-check.mjs`, which onboard places beside the manifest generator; with no line, a presentational change renders `1300x900`, `1300x700`, `820x600` and `390x844` on `/`. Repos onboarded before this exists lack the preview section in `routine.md`; the routine derives the command from the shape until you add it (`vite preview` for Vite repos, python's static server otherwise).
++- **Triage escalation** — the sweep (Sonnet by default) gets a fourth verdict, `escalated`, for a row whose intent is clear but whose root cause it could not reach after reading the source. After the sweep, `claude-triage.yml`'s Escalate step flips those rows back to `triaging` and asks the Worker (`escalate_triage`) to re-dispatch the workflow scoped to them with the `escalate` surface's model (Fable 5.1 by default; pinnable per repo or globally like the other surfaces). The second pass starts from the sweep's findings in the row's `thread`, may not escalate again, and ends every row as `drafted`, `needs_mockup` or `needs_words`. Intent gaps still go straight to `needs_words` — escalation is for code the fast pass couldn't trace, not for questions only the author can answer.
+ - **Entry screenshots** — an entry may carry one image as context for the run that ships it: `- Screenshot: docs/context/<entry id>.jpg`. The app commits the file beside `TODO.md` when the entry is injected (the Worker's `inject` route takes it as `screenshot: { media_type, data }`), the routine opens it with the Read tool before writing code (<implementation> step 2 in `routine-base.md`), and the completion commit deletes it. The derive passes read image mockups the same way, so a `.png` wireframe referenced from `## Mockups` or `project.md` is a usable design on its own; a sibling `README.md` spec still wins where the two differ. See `mockups-README.md`.
+ 
+ ---
+-- 
+2.43.0
+
