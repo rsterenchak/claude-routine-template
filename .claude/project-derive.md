@@ -71,9 +71,12 @@ say so in the closing summary.
 
 **Read any mockups referenced from Surfaces.** A path like
 `docs/mockups/session-screen.html` is a committed design decision — read the file
-and let it constrain the proposal for that surface. If a referenced mockup does
-not exist, do not invent its design: say so in the proposal's description and keep
-the entry to structure rather than layout.
+and let it constrain the proposal for that surface. An image mockup (`.png`,
+`.jpg`, `.webp`) is read the same way: the Read tool renders images, so open it
+and take its regions and their order as the design; a `README.md` beside it, when
+one exists, states intent the picture only implies and wins where they differ.
+If a referenced mockup does not exist, do not invent its design: say so in the
+proposal's description and keep the entry to structure rather than layout.
 
 ## Step 2 — read what already exists
 

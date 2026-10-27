@@ -73,15 +73,20 @@ read depends on the file:
 - **Prose — a `.md` spec** — read it directly and treat it as authoritative. This
   is the richest case: a written spec states the region contents, ordering, and
   per-page inventory in a form a proposal can be built from without inference.
-- **An image — `.png`, `.jpg`** — you cannot read it. Look for a written spec
-  beside it (a `README.md` in the same folder is the convention) and read that
-  instead. Coursework wireframes are frequently images because the PA required
-  them that way, and the sibling spec is what makes them actionable.
+- **An image — `.png`, `.jpg`, `.webp`** — open it with the Read tool, which
+  renders images, and read it as a wireframe: the regions, their order, what
+  sits in each. Then look for a written spec beside it (a `README.md` in the
+  same folder is the convention) and read that too when it exists — prose
+  states intent and DOM order a picture only implies, so where the two
+  disagree the prose wins. Coursework wireframes are frequently images because
+  the PA required them that way; the picture is usable on its own, and the
+  sibling spec sharpens it.
 
-An image with no sibling spec is not a usable design. Say so in the proposal's
-description and keep the entry to structure rather than layout — do not guess at
-what the picture shows. If a referenced path doesn't resolve at all, treat it the
-same way.
+Describe only what the image actually shows. Where it leaves a region's contents
+or behavior open, keep that part of the entry to structure rather than invented
+layout, and say in the description what the picture settled and what it left
+open. If a referenced path doesn't resolve at all, say so in the proposal's
+description and keep the entry to structure.
 
 ## Step 2 — read what already exists
 
@@ -319,8 +324,9 @@ Rules:
   against what the repo's stack already supplies. And look before you park:
   `## Mockups`, then the rest of the brief, then the checkout's design folder.
   Park only what is genuinely open after all three.
-- Never guess at an image. A `.png` wireframe is opaque; read its sibling spec or
-  treat the design as absent.
+- Never guess past an image. Read a `.png` wireframe with the Read tool and
+  propose only what it shows (plus its sibling spec, which wins where they
+  differ); an unresolvable path is an absent design.
 - Don't re-propose a covered aspect (Step 2) — this is what makes re-running safe.
   A `needs_words` question is not coverage: re-read its requirement and propose if
   the spec now answers it, rather than skipping the aspect forever. Nor is a
