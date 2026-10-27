@@ -56,6 +56,14 @@ curl -s "$SUPABASE_URL/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.tr
   -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY"
 ```
 
+**Escalation pass.** When the `ESCALATION_ROW_IDS` environment variable is set
+(a comma-separated list of row ids), this run is the SECOND, scoped pass over
+rows an earlier sweep marked `escalated` — see <escalation> below. Append
+`&id=in.(<ids>)` to the Step 1 query so you read exactly those rows and nothing
+else, and treat the last `role:'agent'` message in each row's `thread` as the
+first pass's findings: the files it opened, what it ruled out, its hypotheses.
+Start from those files, not from a fresh Grep of the repo.
+
 Each row's `context` holds `{ title, description }` — the task text, denormalized
 at flag time, so you don't need the `todos` table. If the list is empty, write no
 verdicts and go straight to the closing summary.
@@ -92,11 +100,40 @@ files) enough to root-cause it, then assign exactly ONE verdict:
   Produce a full TODO.md entry (format below) and put it in `draft`, plus the
   declared file paths in `file_paths`.
 
+- **`escalated`** — the task is clear dev work (you know what Robert wants), you
+  have READ the owning source, and you still cannot root-cause it with
+  confidence: the defect doesn't reproduce from the code you can see, the fix
+  would touch a flow you can't trace end to end, or two plausible causes remain
+  and the source doesn't settle which. Do NOT ask Robert — he can't read the
+  code for you. Write `escalated` with a thread message that hands the next pass
+  a warm start: the files you opened (repo-relative paths), what you ruled out
+  and why, and your ranked hypotheses. A second, scoped run on a stronger model
+  picks the row up from that message. `escalated` is NOT for ambiguity about
+  intent — that stays `needs_words` — and it is never available in an
+  escalation pass (see <escalation>).
+
 **Downgrade rather than guess.** If you can't confidently root-cause a task with a
-reasonable read of the source, do NOT draft on a hunch — set it to `needs_words`
-with a precise question. A wrong draft is worse than a question. (Deep root-cause
-that a fast pass can't crack is where Opus escalation will eventually plug in;
-until then, `needs_words` is the safe exit.)
+reasonable read of the source, do NOT draft on a hunch. Pick the exit by what is
+missing: if the gap is *what Robert wants*, `needs_words` with a precise question;
+if the gap is *what the code does*, `escalated` with your findings. A wrong draft
+is worse than either.
+
+<escalation>
+An escalation pass (`ESCALATION_ROW_IDS` set) resolves rows the sweep handed
+over. Rules that differ from a sweep:
+
+- Read the thread's findings first and open the files it names BEFORE any wider
+  search. Widen only when those files don't settle it; say in the thread message
+  what the first pass missed.
+- `escalated` is NOT a verdict here. Every row ends as `drafted`, `needs_mockup`,
+  or `needs_words`. If even this pass can't root-cause it, write `needs_words`
+  with a question that names what you traced and exactly which fact would
+  settle it — that question is the only thing that should reach Robert.
+- Append your message after the first pass's in `thread`; never overwrite it.
+- Cost discipline is stricter: Grep with line numbers and Read with
+  `offset`/`limit`; never read a whole file over ~300 lines. You are the
+  expensive pass — spend turns on the hard part, not on re-deriving the sweep.
+</escalation>
 
 ## Step 3 — write the verdict back
 
@@ -123,6 +160,10 @@ history. Use an ISO timestamp for `ts`.
   (preserve the existing `title`/`description` in `context`; add the visual fields, including the raw `markup`/`css` source slices)
 - `drafted`:
   `{"state":"drafted","draft":"<full TODO.md entry>","file_paths":["{{SRC_DIR}}...","..."],"thread":[{"role":"agent","text":"Drafted — ready to dispatch.","ts":"<now>"}]}`
+- `escalated` (sweep only, never in an escalation pass):
+  `{"state":"escalated","thread":[{"role":"agent","text":"Escalated for a deeper pass. Read: <paths>. Ruled out: <what, why>. Hypotheses: 1) … 2) …","ts":"<now>"}]}`
+  (the workflow flips the row back to `triaging` and dispatches the scoped pass
+  after this run ends — you do nothing else for it)
 
 `file_paths` MUST match the paths inside the drafted entry — they drive the
 serialize check and the post-run diff guard downstream, so getting them right
@@ -184,14 +225,18 @@ Rules:
 - If a curl fails, note it and continue to the next task — don't abort the sweep.
 - No delegation and no deferral. You are the only actor in this run (see above);
   do every read and every PATCH yourself, in this turn.
-- Every row read in Step 1 must reach a terminal verdict (`needs_words`,
-  `needs_mockup`, or `drafted`) before you write the summary. Step 4 is the check.
+- Every row read in Step 1 must reach a verdict (`needs_words`, `needs_mockup`,
+  `drafted`, or — in a sweep only — `escalated`) before you write the summary.
+  Step 4 is the check.
+- Never write `escalated` in an escalation pass (`ESCALATION_ROW_IDS` set): a row
+  escalates once. Never write it for a row whose gap is intent rather than code.
 
 ## Closing summary
 
 End with ONE paragraph naming what you did per task — how many flagged, and for
-each: the verdict and a one-line why, citing the specific file(s) you read. If
-nothing was flagged, say so. State both counts explicitly: rows read in Step 1 and
+each: the verdict and a one-line why, citing the specific file(s) you read. Name
+every `escalated` row and what it is escalated on; in an escalation pass, say so
+and name what the first pass missed. If nothing was flagged, say so. State both counts explicitly: rows read in Step 1 and
 verdicts written. They MUST match — if they don't, you skipped Step 4, so go back
 and finish it before summarising. Never write a summary that describes work as
 still in flight; by the time you write this paragraph the sweep is over. (This

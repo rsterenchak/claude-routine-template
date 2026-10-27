@@ -4,7 +4,7 @@ name: Claude triage
 # name (workflow_dispatch returns no run id — same trick as claude-run.yml).
 # project_id scopes the sweep to one project's flagged tasks: the agent is
 # per-project for now.
-run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }} · ${{ inputs.model || 'default' }}
+run-name: Claude triage ${{ inputs.correlation_id }} · ${{ inputs.project_id }} · ${{ inputs.model || 'default' }}${{ inputs.escalation == 'true' && ' · escalation' || '' }}
 
 on:
   workflow_dispatch:
@@ -19,6 +19,18 @@ on:
         required: false
       model:
         description: resolved model id (empty = workflow default); kimi-*/deepseek-* reroute via the Worker gateway
+        type: string
+        required: false
+      # Escalation pass: set by the Worker's escalate_triage route, which the
+      # sweep's own "Escalate" step below calls for rows it marked `escalated`.
+      # The run is then scoped to exactly row_ids (see .claude/triage.md
+      # <escalation>), and the Escalate step is skipped so a row escalates once.
+      escalation:
+        description: set to true for the scoped second pass over row_ids
+        type: string
+        required: false
+      row_ids:
+        description: comma-separated agent_queue ids the escalation pass is scoped to
         type: string
         required: false
   # Optional self-sweep — uncomment to have the agent wake on a schedule and
@@ -114,11 +126,19 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PROJECT_ID: ${{ inputs.project_id }}
+          ESCALATION: ${{ inputs.escalation }}
+          ROW_IDS: ${{ inputs.row_ids }}
         run: |
           set +e
           SNAP="$RUNNER_TEMP/triage-snapshot.txt"
           : > "$SNAP"
-          curl -s "${SUPABASE_URL%/}/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id" \
+          # An escalation pass owns only its row ids; a sweep owns every
+          # triaging row of the project.
+          FILTER=""
+          if [ "$ESCALATION" = "true" ] && [ -n "$ROW_IDS" ]; then
+            FILTER="&id=in.($ROW_IDS)"
+          fi
+          curl -s "${SUPABASE_URL%/}/rest/v1/agent_queue?project_id=eq.$PROJECT_ID&state=eq.triaging&select=id$FILTER" \
             -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
             | jq -r '.[]?.id // empty' > "$SNAP" 2>/dev/null
@@ -133,6 +153,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           PROJECT_ID: ${{ inputs.project_id }}
+          # Set only on the scoped second pass; .claude/triage.md <escalation>
+          # keys its behaviour (Step 1 filter, no `escalated` verdict) off it.
+          ESCALATION_ROW_IDS: ${{ inputs.escalation == 'true' && inputs.row_ids || '' }}
         with:
           # Subscription auth (Pro/Max) — the SAME plan-billed path as
           # claude-run.yml, NOT anthropic_api_key. This is what puts triage on
@@ -164,7 +187,9 @@ jobs:
             Project id to sweep: ${{ inputs.project_id }}
 
             Read `.claude/triage.md` from the repository and execute it exactly as
-            written, for the project id above. It defines how to read the flagged
+            written, for the project id above. If the ESCALATION_ROW_IDS environment
+            variable is set, this is an ESCALATION PASS scoped to those rows — follow
+            the <escalation> section of triage.md. It defines how to read the flagged
             tasks from Supabase, classify each against the real source in this
             checkout, and write the verdict back to Supabase. Complete the whole
             sweep, then exit with the one-paragraph summary the routine specifies.
@@ -218,4 +243,71 @@ jobs:
               -d "$(jq -cn --arg r "$REASON" '{state:"failed",failure_reason:$r}')")
             echo "Reap: $ID triaging → failed (HTTP $CODE)"
           done < "$SNAP"
+          exit 0
+
+      # Hand rows the sweep marked `escalated` to the scoped second pass. Runs
+      # AFTER the reap so the rows it flips back to `triaging` are never in the
+      # reap's path, and only on a sweep (an escalation pass may not escalate
+      # again). Order: flip to `triaging` first so the app keeps showing
+      # Generating… and the queued pass finds them in its Step 1; then ask the
+      # Worker to dispatch (escalate_triage resolves the `escalate` surface model
+      # — Fable by default — and re-dispatches this workflow with row_ids). The
+      # new run queues behind this one on the concurrency group, which is what
+      # the app's sweep tracker waits for before it would reap anything. If the
+      # Worker is unreachable or refuses, flip the rows to `failed` with a
+      # reason so they surface as STUCK + Retry triage instead of sitting at
+      # an unknown state. Never fails the job.
+      - name: Escalate unresolved rows
+        if: always() && inputs.escalation != 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          PROJECT_ID: ${{ inputs.project_id }}
+          INJECTOR_URL: ${{ secrets.TODO_INJECTOR_URL }}
+          INJECTOR_SECRET: ${{ secrets.TODO_INJECTOR_SECRET }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+        run: |
+          set +e
+          BASE="${SUPABASE_URL%/}/rest/v1/agent_queue"
+          IDS=$(curl -s "$BASE?project_id=eq.$PROJECT_ID&state=eq.escalated&select=id" \
+            -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+            | jq -r '[.[]?.id // empty] | join(",")' 2>/dev/null)
+          if [ -z "$IDS" ]; then
+            echo "Escalate: no escalated rows — nothing to do."
+            exit 0
+          fi
+          echo "Escalate: $IDS"
+          patch_rows() {
+            curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BASE?id=in.($IDS)" \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -H "Prefer: return=minimal" \
+              -d "$1"
+          }
+          fail_rows() {
+            CODE=$(patch_rows "$(jq -cn --arg r "$1" '{state:"failed",failure_reason:$r}')")
+            echo "Escalate: rows → failed (HTTP $CODE): $1"
+          }
+          if [ -z "$INJECTOR_URL" ] || [ -z "$INJECTOR_SECRET" ]; then
+            fail_rows 'Escalation needs the Worker (TODO_INJECTOR_URL / TODO_INJECTOR_SECRET are missing). Use Retry triage to run the sweep again.'
+            exit 0
+          fi
+          CODE=$(patch_rows '{"state":"triaging"}')
+          echo "Escalate: rows → triaging (HTTP $CODE)"
+          ROW_JSON=$(printf '%s' "$IDS" | jq -R -c 'split(",")')
+          RESP=$(curl -s -w '\n%{http_code}' -X POST "${INJECTOR_URL%/}" \
+            -H "Authorization: Bearer $INJECTOR_SECRET" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -cn --arg repo "$GITHUB_REPOSITORY" --arg pid "$PROJECT_ID" --arg corr "${CORRELATION_ID}-esc" --argjson ids "$ROW_JSON" \
+                  '{escalate_triage:true, repo:$repo, project_id:$pid, correlation_id:$corr, row_ids:$ids}')")
+          HTTP=$(printf '%s' "$RESP" | tail -n1)
+          BODY=$(printf '%s' "$RESP" | sed '$d')
+          if [ "$HTTP" != "200" ]; then
+            echo "Escalate: Worker refused (HTTP $HTTP): $BODY"
+            fail_rows "Escalation dispatch failed (HTTP $HTTP). Use Retry triage to run the sweep again."
+            exit 0
+          fi
+          echo "Escalate: dispatched — $BODY"
           exit 0
