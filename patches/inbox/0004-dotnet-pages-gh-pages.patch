@@ -1,0 +1,331 @@
+From d3e331951b60a9f36baee7ee175f1eed2e60f319 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 03:42:04 -0800
+Subject: [PATCH 2/2] dotnet: serve Pages from gh-pages holding only the
+ manifest files
+
+The .NET shapes (console, desktop, maui) served Pages from main's root so
+the dashboard could fetch src-manifest.json. A Pages site is public even
+when the repo is private, so that put every file on main one URL away from
+anyone: the source, docs, TODO.md, CLAUDE.md.
+
+- manifest-dotnet.yml: after committing the outputs to main as before,
+  publish src-manifest.json, src-symbols.json, src-tours.json and
+  src-book.json (those that exist) plus .nojekyll to gh-pages as a single
+  rebuilt commit. Nothing is pushed when the branch's tree already matches.
+- claude-book.yml: a book run on a .NET shape publishes the same files to
+  gh-pages after its commit, since that commit carries [skip ci].
+- onboard.sh: .NET shapes create gh-pages when it is missing, seeded with
+  the outputs the target already has, then point Pages at gh-pages/root
+  (POST to create the site, PUT to move an existing one). A repo onboarded
+  earlier is moved by its next refresh. SQL and served-from-source are
+  unchanged.
+- README.md, SHAPES.md: Pages source per shape.
+
+The dashboard's URLs do not change.
+---
+ .github/workflows/claude-book.yml     | 47 ++++++++++++++
+ .github/workflows/manifest-dotnet.yml | 56 +++++++++++++++--
+ README.md                             |  6 +-
+ SHAPES.md                             |  2 +-
+ onboard.sh                            | 90 ++++++++++++++++++++++++---
+ 5 files changed, 187 insertions(+), 14 deletions(-)
+
+diff --git a/.github/workflows/claude-book.yml b/.github/workflows/claude-book.yml
+index 49906b2..a121a5f 100644
+--- a/.github/workflows/claude-book.yml
++++ b/.github/workflows/claude-book.yml
+@@ -314,6 +314,53 @@ jobs:
+           if [ "$published" = "1" ]; then echo "published=1" >> "$GITHUB_OUTPUT"; fi
+           echo "changed=1" >> "$GITHUB_OUTPUT"
+ 
++      # .NET shapes serve Pages from the gh-pages branch, which holds only the
++      # generated files (manifest.yml there explains why: a Pages site is public
++      # even for a private repo). The commit above put the regenerated outputs
++      # on main with [skip ci], so manifest.yml will not run for it — publish
++      # the same files to gh-pages here, or the Understanding tab would keep
++      # showing the previous book. Every other shape skips this step.
++      - name: Publish manifest outputs to gh-pages (.NET shapes)
++        if: steps.commit.outputs.published == '1'
++        env:
++          GITHUB_TOKEN: ${{ github.token }}
++          MANIFEST_LANG: '{{MANIFEST_LANG}}'
++        run: |
++          set -euo pipefail
++          if [ "$MANIFEST_LANG" != "csharp" ]; then
++            echo "Not a .NET shape — Pages serves this repo from where it always has."
++            exit 0
++          fi
++          out="$RUNNER_TEMP/pages-out"
++          rm -rf "$out" && mkdir -p "$out"
++          n=0
++          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
++            if [ -f "$f" ]; then cp "$f" "$out/$f"; n=$((n+1)); fi
++          done
++          if [ "$n" -eq 0 ]; then
++            echo "No manifest outputs to publish."
++            exit 0
++          fi
++          : > "$out/.nojekyll"
++          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
++          cd "$out"
++          git init -q -b gh-pages
++          git config user.name "github-actions[bot]"
++          git config user.email "github-actions[bot]@users.noreply.github.com"
++          git add -A
++          git commit -q -m "Publish manifest outputs"
++          new_tree="$(git rev-parse 'HEAD^{tree}')"
++          old_tree=""
++          if git fetch -q --depth 1 "$remote" gh-pages 2>/dev/null; then
++            old_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
++          fi
++          if [ "$new_tree" = "$old_tree" ]; then
++            echo "gh-pages already holds these outputs — nothing to publish."
++            exit 0
++          fi
++          git push -q -f "$remote" gh-pages:gh-pages
++          echo "Published ${n} file(s) to gh-pages."
++
+       # Build-pipeline repos publish from dist/ via deploy.yml, which a
+       # GITHUB_TOKEN push does not trigger — dispatch it. Root-served repos
+       # already got their outputs in the commit above (published=1), so
+diff --git a/.github/workflows/manifest-dotnet.yml b/.github/workflows/manifest-dotnet.yml
+index 2a9fa8b..30d40fc 100644
+--- a/.github/workflows/manifest-dotnet.yml
++++ b/.github/workflows/manifest-dotnet.yml
+@@ -6,9 +6,8 @@ name: Update source manifest (.NET)
+ # dashboard's Structure tab fetches, so a C# repo gets a Code lens (file tree
+ # + Explain + View on GitHub) just like the web repos do.
+ #
+-# It regenerates src-manifest.json at the repo ROOT (where Pages serves it,
+-# "Deploy from a branch -> main -> root") and commits it back to main, but
+-# ONLY when the .cs file LIST changed: deterministic mode (no volatile
++# It regenerates src-manifest.json at the repo ROOT and commits it back to
++# main, but ONLY when the .cs file LIST changed: deterministic mode (no volatile
+ # timestamp/sha) means an unchanged list produces a byte-identical manifest
+ # and no commit. The generator is the same gen-src-manifest the web shapes
+ # use, run in csharp mode — a recursive .cs walk (bin/obj/generated skipped)
+@@ -26,7 +25,15 @@ name: Update source manifest (.NET)
+ #
+ # The generator also writes src-symbols.json (definitions index for code
+ # tracing) and, when codetour.json / codebook.json exist, src-tours.json /
+-# src-book.json — the Understanding tab's content, served from the same root.
++# src-book.json — the Understanding tab's content.
++#
++# What Pages serves: the gh-pages branch, which this workflow fills with those
++# generated files and NOTHING else ("Deploy from a branch -> gh-pages -> root").
++# A Pages site is public even when the repo is private, so serving main's root
++# would put every file on main — the source, the docs, TODO.md — one URL away
++# from anyone. gh-pages is a single commit rebuilt on each change, so it never
++# carries history either. The dashboard reads the same URLs as before
++# (https://<owner>.github.io/<repo>/src-manifest.json and its siblings).
+ #
+ # Loop prevention: paths-ignore skips the generated files (so the manifest
+ # commit doesn't re-trigger this workflow) and the commit carries [skip ci].
+@@ -81,3 +88,44 @@ jobs:
+           else
+             echo "Manifest outputs unchanged — nothing to commit."
+           fi
++
++      # Publish the generated files, and only those, to gh-pages. Runs on every
++      # pass rather than only after a commit above: a repo refreshed onto this
++      # workflow has outputs on main already and an empty or missing gh-pages.
++      # The branch is rebuilt as one commit; when its tree already matches,
++      # nothing is pushed, so an unchanged manifest costs no Pages build.
++      - name: Publish manifest outputs to gh-pages
++        env:
++          GITHUB_TOKEN: ${{ github.token }}
++        run: |
++          set -euo pipefail
++          out="$RUNNER_TEMP/pages-out"
++          rm -rf "$out" && mkdir -p "$out"
++          n=0
++          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
++            if [ -f "$f" ]; then cp "$f" "$out/$f"; n=$((n+1)); fi
++          done
++          if [ "$n" -eq 0 ]; then
++            echo "No manifest outputs to publish."
++            exit 0
++          fi
++          # Serve the files as they are — no Jekyll pass over a branch of JSON.
++          : > "$out/.nojekyll"
++          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
++          cd "$out"
++          git init -q -b gh-pages
++          git config user.name "github-actions[bot]"
++          git config user.email "github-actions[bot]@users.noreply.github.com"
++          git add -A
++          git commit -q -m "Publish manifest outputs"
++          new_tree="$(git rev-parse 'HEAD^{tree}')"
++          old_tree=""
++          if git fetch -q --depth 1 "$remote" gh-pages 2>/dev/null; then
++            old_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
++          fi
++          if [ "$new_tree" = "$old_tree" ]; then
++            echo "gh-pages already holds these outputs — nothing to publish."
++            exit 0
++          fi
++          git push -q -f "$remote" gh-pages:gh-pages
++          echo "Published ${n} file(s) to gh-pages."
+diff --git a/README.md b/README.md
+index d5fa0eb..551c448 100644
+--- a/README.md
++++ b/README.md
+@@ -174,7 +174,8 @@ The worker reads `inject_targets` live (via its `resolveTarget`), so there's not
+ 
+ **9b — GitHub Pages source.** **Settings → Pages → Source: "Deploy from a branch".**
+ - **Build-pipeline:** branch `gh-pages`, `/ (root)`.
+-- **Served-from-source, .NET (console/desktop/maui), and SQL:** branch `main`, `/ (root)` — Pages serves the committed `src-manifest.json` directly, no build.
++- **Served-from-source and SQL:** branch `main`, `/ (root)` — Pages serves the committed `src-manifest.json` directly, no build.
++- **.NET (console/desktop/maui):** branch `gh-pages`, `/ (root)` — `manifest.yml` publishes the generated manifest files there and nothing else. A Pages site is public even when the repo is private, so these shapes never serve `main`. `onboard.sh` creates the branch and sets this; a repo onboarded earlier is moved by its next refresh.
+ - **repo-only:** skip — no manifest to serve.
+ 
+ If Pages was never enabled, the first run may create/commit the manifest but Pages won't serve until you point it here.
+@@ -189,7 +190,8 @@ https://<your-username>.github.io/<your-repo>/src-manifest.json
+ 
+ It should return JSON with a `files` array and the right `lens` for your shape (`"ui"` web, `"types"` .NET, `"sql"` SQL — plus a `types`/`tables` array for the latter two). If it 404s:
+ - **Build-pipeline:** `deploy.yml` green, right generator variant, build actually output to `dist/` (align generator `MANIFEST_OUT_DIR`, build output dir, and `publish_dir` if your build targets `build/`).
+-- **Served-from-source / .NET / SQL:** the `manifest.yml` workflow green and committed `src-manifest.json` to root, Pages serving `main`/root (9b), and `src-manifest.json` **not** in `.gitignore` (it must be committed).
++- **Served-from-source / SQL:** the `manifest.yml` workflow green and committed `src-manifest.json` to root, Pages serving `main`/root (9b), and `src-manifest.json` **not** in `.gitignore` (it must be committed).
++- **.NET:** the `manifest.yml` workflow green through its "Publish manifest outputs to gh-pages" step, a `gh-pages` branch holding `src-manifest.json`, and Pages serving `gh-pages`/root (9b).
+ 
+ ### Step 11 — Test injection end-to-end
+ 
+diff --git a/SHAPES.md b/SHAPES.md
+index 7c0a386..b75aa5b 100644
+--- a/SHAPES.md
++++ b/SHAPES.md
+@@ -222,7 +222,7 @@ runnable `Main`.
+ **Template:** `rsterenchak/template-console`
+ 
+ **Onboarding adds:** `test.yml` (dotnet test on ubuntu), `manifest.yml`,
+-`run-capture.yml`. Pages source: `main`, root (manifest only — no app deploy).
++`run-capture.yml`. Pages source: `gh-pages`, root (manifest files only — no app deploy).
+ 
+ **Gotchas**
+ - **Exactly one `OutputType=Exe` project.** `run-capture.yml` auto-discovers the
+diff --git a/onboard.sh b/onboard.sh
+index 22b6873..fdb0098 100755
+--- a/onboard.sh
++++ b/onboard.sh
+@@ -107,8 +107,10 @@ CAPTURE_FILES=( ".github/workflows/run-capture.yml" )
+ DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
+ MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
+ # .NET manifest publishing — the (CommonJS) scanner + a publish workflow that
+-# runs it in csharp mode and serves src-manifest.json from main root (like
+-# served-from-source), so the Structure tab can fetch a C# repo's file tree.
++# runs it in csharp mode, commits src-manifest.json to main and publishes the
++# generated files alone to gh-pages, which is what Pages serves, so the
++# Structure tab can fetch a C# repo's file tree without the repo's source
++# being served beside it.
+ # Added to all three .NET shapes; repo-only stays manifest-less. The template
+ # stores the workflow as manifest-dotnet.yml and onboard writes it into the
+ # target as plain manifest.yml (the SRC>DEST rename, same as test-dotnet.yml).
+@@ -277,8 +279,8 @@ ni_read_secret() {
+   read -rs "$__niv"
+ }
+ # enable_pages_main_root "<label suffix>" — enable GitHub Pages serving from
+-# main/root (served-from-source and the .NET/SQL manifest shapes, which commit
+-# src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
++# main/root (served-from-source, whose site IS main's root, and the SQL manifest
++# shape, which commits src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
+ # it — PUT only UPDATES an existing site and 404s when there is none, which was
+ # the "FAILED Pages source config" cause on fresh onboards. POST creates the site
+ # WITH the source set; a 409 means it already exists (already enabled), so that's
+@@ -298,6 +300,73 @@ enable_pages_main_root() {
+   echo "         ${c_dim}${__out}${c_rst}"
+   return 0
+ }
++# ensure_pages_branch — make sure the target has a gh-pages branch for Pages to
++# serve. An existing branch is left alone (its workflow keeps it current). A
++# missing one is created as a single commit holding the manifest outputs the
++# target already has at its root, so a repo being moved off main/root keeps
++# serving the same files with no gap; a fresh repo gets just .nojekyll and its
++# first manifest run fills the rest. Built in a scratch repo and pushed to the
++# target's own remote, so the target clone's index and work tree are untouched.
++# Returns non-zero when the branch could not be created.
++ensure_pages_branch() {
++  local __remote __tmp __f __err="" __rc=0
++  __remote="$(cd "$TARGET" && git remote get-url origin 2>/dev/null)" || return 1
++  [ -n "$__remote" ] || return 1
++  if git ls-remote --exit-code --heads "$__remote" gh-pages >/dev/null 2>&1; then
++    return 0
++  fi
++  __tmp="$(mktemp -d)" || return 1
++  for __f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
++    if [ -f "$TARGET/$__f" ]; then cp "$TARGET/$__f" "$__tmp/$__f"; fi
++  done
++  : > "$__tmp/.nojekyll"
++  __err="$(
++    cd "$__tmp" \
++      && git init -q -b gh-pages \
++      && git add -A \
++      && git -c user.name="claude-onboard[bot]" \
++             -c user.email="claude-onboard@users.noreply.github.com" \
++             commit -q -m "Publish manifest outputs" \
++      && git push -q "$__remote" gh-pages:gh-pages 2>&1 >/dev/null
++  )" || __rc=$?
++  rm -rf "$__tmp"
++  if [ "$__rc" -ne 0 ] && [ -n "$__err" ]; then
++    # The remote URL can carry a token — never echo it.
++    printf '%s\n' "$__err" | sed -E 's#://[^@/ ]+@#://#g' | sed "s/^/         /"
++  fi
++  return "$__rc"
++}
++# enable_pages_gh_pages "<label suffix>" — serve Pages from gh-pages/root (the
++# .NET manifest shapes). A Pages site is public even when the repo is private,
++# so these shapes must not serve main: gh-pages holds only the generated
++# manifest files. POST creates a site that does not exist yet; a 409 means one
++# does — possibly still pointed at main/root by an earlier onboard — so PUT
++# moves its source. The branch is created first, because Pages refuses a source
++# branch that does not exist. Non-fatal like enable_pages_main_root; sets
++# GH_PAGES_DONE on success.
++enable_pages_gh_pages() {
++  local __label="$1" __out __rc=0
++  if ! ensure_pages_branch; then
++    echo "  ${c_red}FAILED${c_rst} creating the gh-pages branch — Pages source left as it was"
++    echo "         ${c_dim}After the first manifest run creates gh-pages: Settings -> Pages -> gh-pages / root${c_rst}"
++    return 0
++  fi
++  __out=$(gh api -X POST "/repos/$REPO_FOR_GH/pages" \
++    -f "source[branch]=gh-pages" -f "source[path]=/" 2>&1) || __rc=$?
++  if [ "$__rc" -ne 0 ] && printf '%s' "$__out" | grep -qiE "409|already exists"; then
++    __rc=0
++    __out=$(gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
++      -f "source[branch]=gh-pages" -f "source[path]=/" 2>&1) || __rc=$?
++  fi
++  if [ "$__rc" -eq 0 ]; then
++    echo "  ${c_grn}set${c_rst}    Pages source: gh-pages branch, root${__label}"
++    GH_PAGES_DONE=true
++    return 0
++  fi
++  echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> gh-pages / root)"
++  echo "         ${c_dim}${__out}${c_rst}"
++  return 0
++}
+ # ─────────────────────────────────────────────────────────────────
+ # 1. Validate target
+ # ─────────────────────────────────────────────────────────────────
+@@ -1468,9 +1537,16 @@ if [ "$USE_GH" = "true" ]; then
+       served-from-source)
+         enable_pages_main_root ""
+         ;;
+-      console|desktop|maui|sql)
+-        # .NET and SQL shapes publish src-manifest.json to Pages (served from
+-        # main root, like served-from-source) so the Structure tab can fetch it.
++      console|desktop|maui)
++        # .NET shapes publish the generated manifest files to gh-pages and
++        # serve Pages from there, so the Structure and Understanding tabs can
++        # fetch them while nothing else on main is served. A repo onboarded
++        # before this is moved off main/root here.
++        enable_pages_gh_pages " (serves the manifest files only)"
++        ;;
++      sql)
++        # The SQL shape publishes src-manifest.json to Pages (served from main
++        # root, like served-from-source) so the Structure tab can fetch it.
+         enable_pages_main_root " (serves src-manifest.json)"
+         ;;
+       repo-only)
+-- 
+2.43.0
+

@@ -1,0 +1,131 @@
+From bd6be3b353c0a84d913467d086364adf27ab8adc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 03:38:00 -0800
+Subject: [PATCH 1/2] book: commit on main's current tip so a pass survives
+ main moving
+
+claude-book.yml pushed from the commit it checked out. A pass runs for
+minutes, so a manifest commit or a merged entry landing meanwhile made the
+push a non-fast-forward and the whole pass was lost.
+
+The commit step now sets the two authored files aside, moves the checkout
+to the fetched tip of main, puts the files back, regenerates the manifest
+outputs there (root-served shapes) and commits. A push that still loses a
+race retries on the newer tip, three times. It refuses only when main
+itself changed codebook.json or codetour.json during the pass, since
+restoring this pass's copy would drop that change.
+---
+ .github/workflows/claude-book.yml | 82 ++++++++++++++++++++++++-------
+ 1 file changed, 63 insertions(+), 19 deletions(-)
+
+diff --git a/.github/workflows/claude-book.yml b/.github/workflows/claude-book.yml
+index 6c2b6d5..49906b2 100644
+--- a/.github/workflows/claude-book.yml
++++ b/.github/workflows/claude-book.yml
+@@ -224,7 +224,7 @@ jobs:
+           fi
+           rm -f gen.out gen.err
+ 
+-      # Commit the book. Two things about the push:
++      # Commit the book. Three things about the push:
+       #   1. claude-code-action rewrites the checkout's remote URL with its own
+       #      app token and REVOKES that token in its post step, so a plain
+       #      `git push` here fails with "Invalid username or token". Point the
+@@ -232,6 +232,15 @@ jobs:
+       #   2. A GITHUB_TOKEN push does not trigger other workflows, so the
+       #      republish (manifest.yml / deploy.yml) is dispatched explicitly in
+       #      the next step rather than relied on as a push trigger.
++      #   3. A pass runs for minutes and main can move under it (a manifest
++      #      commit, a merged entry). A push from the checkout's commit is then
++      #      rejected and the whole pass is lost. So the book is committed on
++      #      top of whatever main is NOW: the two authored files are set aside,
++      #      the checkout is moved to the fetched tip, the files are put back
++      #      and the commit is made there. A push that still loses a race is
++      #      retried on the newer tip. The one case that is refused is main
++      #      having changed the book itself during the pass: putting this
++      #      pass's copy back would silently drop that change.
+       - name: Commit codebook.json if it changed
+         id: commit
+         working-directory: {{WORKING_DIR}}
+@@ -249,25 +258,60 @@ jobs:
+           fi
+           git config user.name "github-actions[bot]"
+           git config user.email "github-actions[bot]@users.noreply.github.com"
+-          git add $changed
+-          # Repos that serve the manifest outputs from the repo root (the
+-          # served-from-source and .NET shapes carry manifest.yml) get them
+-          # regenerated into this same commit: a book run IS a manifest publish,
+-          # so src-symbols.json can never lag the chapters and there is no
+-          # separate "Update source manifest" step to remember. Build-pipeline
+-          # repos keep theirs under dist/ via deploy.yml, dispatched below.
+-          if [ -f "$GITHUB_WORKSPACE/.github/workflows/manifest.yml" ]; then
+-            ( cd "$GITHUB_WORKSPACE" && MANIFEST_OUT_DIR=. MANIFEST_DETERMINISTIC=true \
+-                MANIFEST_LANG='{{MANIFEST_LANG}}' MANIFEST_SRC_ROOT='{{MANIFEST_SRC_ROOT}}' \
+-                node "{{WORKING_DIR}}/scripts/$MANIFEST_VARIANT" )
+-            for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
+-              [ -f "$GITHUB_WORKSPACE/$f" ] && git add "$GITHUB_WORKSPACE/$f"
+-            done
+-            echo "published=1" >> "$GITHUB_OUTPUT"
+-          fi
+-          git commit -m "Update code book (${{ inputs.scope || 'stale' }}) [skip ci]"
+           git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+-          git push origin HEAD:main
++
++          base="$(git rev-parse HEAD)"
++          keep="$RUNNER_TEMP/book-keep"
++          rm -rf "$keep" && mkdir -p "$keep"
++          for f in $changed; do cp "$f" "$keep/$f"; done
++
++          pushed=0
++          for attempt in 1 2 3; do
++            git fetch --quiet --depth 1 origin main
++            if ! git diff --quiet "$base" FETCH_HEAD -- codebook.json codetour.json; then
++              echo "main changed codebook.json or codetour.json while this pass ran."
++              echo "Refusing to overwrite that change — run the book pass again."
++              exit 1
++            fi
++            git reset --quiet --hard FETCH_HEAD
++            for f in $changed; do cp "$keep/$f" "$f"; done
++            git add $changed
++            # Repos that serve the manifest outputs from the repo root (the
++            # served-from-source and .NET shapes carry manifest.yml) get them
++            # regenerated into this same commit: a book run IS a manifest
++            # publish, so src-symbols.json can never lag the chapters and there
++            # is no separate "Update source manifest" step to remember. They
++            # are regenerated here, after the move to main's tip, so they
++            # describe the source this commit actually sits on. Build-pipeline
++            # repos keep theirs under dist/ via deploy.yml, dispatched below.
++            published=0
++            if [ -f "$GITHUB_WORKSPACE/.github/workflows/manifest.yml" ]; then
++              ( cd "$GITHUB_WORKSPACE" && MANIFEST_OUT_DIR=. MANIFEST_DETERMINISTIC=true \
++                  MANIFEST_LANG='{{MANIFEST_LANG}}' MANIFEST_SRC_ROOT='{{MANIFEST_SRC_ROOT}}' \
++                  node "{{WORKING_DIR}}/scripts/$MANIFEST_VARIANT" )
++              for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
++                [ -f "$GITHUB_WORKSPACE/$f" ] && git add "$GITHUB_WORKSPACE/$f"
++              done
++              published=1
++            fi
++            if git diff --cached --quiet; then
++              echo "main already holds this book — nothing to commit."
++              echo "changed=0" >> "$GITHUB_OUTPUT"
++              exit 0
++            fi
++            git commit --quiet -m "Update code book (${{ inputs.scope || 'stale' }}) [skip ci]"
++            if git push origin HEAD:main; then
++              pushed=1
++              break
++            fi
++            echo "Push rejected (attempt ${attempt}/3) — main moved again; retrying on its new tip."
++            sleep 3
++          done
++          if [ "$pushed" != "1" ]; then
++            echo "Could not push the book after 3 attempts."
++            exit 1
++          fi
++          if [ "$published" = "1" ]; then echo "published=1" >> "$GITHUB_OUTPUT"; fi
+           echo "changed=1" >> "$GITHUB_OUTPUT"
+ 
+       # Build-pipeline repos publish from dist/ via deploy.yml, which a
+-- 
+2.43.0
+
