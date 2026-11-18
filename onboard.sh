@@ -336,14 +336,45 @@ ensure_pages_branch() {
   fi
   return "$__rc"
 }
+# rebuild_pages_site — start a Pages build from gh-pages by pushing it a commit
+# that changes no file. Pointing Pages at a branch does not rebuild the site:
+# it keeps serving its last build until the source branch is next pushed to. A
+# repo moved off main/root would otherwise go on serving main, because
+# ensure_pages_branch seeds gh-pages BEFORE the source moves and the target's
+# manifest run then finds the branch already current and pushes nothing. The
+# commit is a child of the branch's tip with the same tree, built in a scratch
+# repo so the target clone is untouched. Returns non-zero when it could not push.
+rebuild_pages_site() {
+  local __remote __tmp __err="" __rc=0
+  __remote="$(cd "$TARGET" && git remote get-url origin 2>/dev/null)" || return 1
+  [ -n "$__remote" ] || return 1
+  __tmp="$(mktemp -d)" || return 1
+  __err="$(
+    cd "$__tmp" \
+      && git init -q \
+      && git fetch -q --depth 1 "$__remote" gh-pages 2>&1 \
+      && __new="$(git -c user.name="claude-onboard[bot]" \
+                      -c user.email="claude-onboard@users.noreply.github.com" \
+                      commit-tree 'FETCH_HEAD^{tree}' -p FETCH_HEAD \
+                      -m "Rebuild Pages from gh-pages")" \
+      && git push -q "$__remote" "${__new}:refs/heads/gh-pages" 2>&1 >/dev/null
+  )" || __rc=$?
+  rm -rf "$__tmp"
+  if [ "$__rc" -ne 0 ] && [ -n "$__err" ]; then
+    # The remote URL can carry a token — never echo it.
+    printf '%s\n' "$__err" | sed -E 's#://[^@/ ]+@#://#g' | sed "s/^/         /"
+  fi
+  return "$__rc"
+}
 # enable_pages_gh_pages "<label suffix>" — serve Pages from gh-pages/root (the
 # .NET manifest shapes). A Pages site is public even when the repo is private,
 # so these shapes must not serve main: gh-pages holds only the generated
 # manifest files. POST creates a site that does not exist yet; a 409 means one
 # does — possibly still pointed at main/root by an earlier onboard — so PUT
 # moves its source. The branch is created first, because Pages refuses a source
-# branch that does not exist. Non-fatal like enable_pages_main_root; sets
-# GH_PAGES_DONE on success.
+# branch that does not exist, and rebuild_pages_site runs last, because the
+# site only changes when gh-pages is pushed to while it is the source.
+# Non-fatal like enable_pages_main_root; sets GH_PAGES_DONE on success.
 enable_pages_gh_pages() {
   local __label="$1" __out __rc=0
   if ! ensure_pages_branch; then
@@ -361,6 +392,12 @@ enable_pages_gh_pages() {
   if [ "$__rc" -eq 0 ]; then
     echo "  ${c_grn}set${c_rst}    Pages source: gh-pages branch, root${__label}"
     GH_PAGES_DONE=true
+    if rebuild_pages_site; then
+      echo "  ${c_grn}pushed${c_rst} gh-pages to start a Pages build from it"
+    else
+      echo "  ${c_red}FAILED${c_rst} starting a Pages build — the site keeps serving its previous build"
+      echo "         ${c_dim}Push any commit to gh-pages, or re-save the source in Settings -> Pages.${c_rst}"
+    fi
     return 0
   fi
   echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> gh-pages / root)"
