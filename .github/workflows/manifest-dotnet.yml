@@ -6,9 +6,8 @@ name: Update source manifest (.NET)
 # dashboard's Structure tab fetches, so a C# repo gets a Code lens (file tree
 # + Explain + View on GitHub) just like the web repos do.
 #
-# It regenerates src-manifest.json at the repo ROOT (where Pages serves it,
-# "Deploy from a branch -> main -> root") and commits it back to main, but
-# ONLY when the .cs file LIST changed: deterministic mode (no volatile
+# It regenerates src-manifest.json at the repo ROOT and commits it back to
+# main, but ONLY when the .cs file LIST changed: deterministic mode (no volatile
 # timestamp/sha) means an unchanged list produces a byte-identical manifest
 # and no commit. The generator is the same gen-src-manifest the web shapes
 # use, run in csharp mode — a recursive .cs walk (bin/obj/generated skipped)
@@ -26,7 +25,15 @@ name: Update source manifest (.NET)
 #
 # The generator also writes src-symbols.json (definitions index for code
 # tracing) and, when codetour.json / codebook.json exist, src-tours.json /
-# src-book.json — the Understanding tab's content, served from the same root.
+# src-book.json — the Understanding tab's content.
+#
+# What Pages serves: the gh-pages branch, which this workflow fills with those
+# generated files and NOTHING else ("Deploy from a branch -> gh-pages -> root").
+# A Pages site is public even when the repo is private, so serving main's root
+# would put every file on main — the source, the docs, TODO.md — one URL away
+# from anyone. gh-pages is a single commit rebuilt on each change, so it never
+# carries history either. The dashboard reads the same URLs as before
+# (https://<owner>.github.io/<repo>/src-manifest.json and its siblings).
 #
 # Loop prevention: paths-ignore skips the generated files (so the manifest
 # commit doesn't re-trigger this workflow) and the commit carries [skip ci].
@@ -81,3 +88,44 @@ jobs:
           else
             echo "Manifest outputs unchanged — nothing to commit."
           fi
+
+      # Publish the generated files, and only those, to gh-pages. Runs on every
+      # pass rather than only after a commit above: a repo refreshed onto this
+      # workflow has outputs on main already and an empty or missing gh-pages.
+      # The branch is rebuilt as one commit; when its tree already matches,
+      # nothing is pushed, so an unchanged manifest costs no Pages build.
+      - name: Publish manifest outputs to gh-pages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pages-out"
+          rm -rf "$out" && mkdir -p "$out"
+          n=0
+          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
+            if [ -f "$f" ]; then cp "$f" "$out/$f"; n=$((n+1)); fi
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "No manifest outputs to publish."
+            exit 0
+          fi
+          # Serve the files as they are — no Jekyll pass over a branch of JSON.
+          : > "$out/.nojekyll"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          cd "$out"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish manifest outputs"
+          new_tree="$(git rev-parse 'HEAD^{tree}')"
+          old_tree=""
+          if git fetch -q --depth 1 "$remote" gh-pages 2>/dev/null; then
+            old_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          fi
+          if [ "$new_tree" = "$old_tree" ]; then
+            echo "gh-pages already holds these outputs — nothing to publish."
+            exit 0
+          fi
+          git push -q -f "$remote" gh-pages:gh-pages
+          echo "Published ${n} file(s) to gh-pages."

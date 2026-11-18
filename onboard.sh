@@ -107,8 +107,10 @@ CAPTURE_FILES=( ".github/workflows/run-capture.yml" )
 DESKTOP_FILES=( ".github/workflows/test-dotnet-windows.yml>.github/workflows/test.yml" )
 MAUI_FILES=( ".github/workflows/test-maui.yml>.github/workflows/test.yml" )
 # .NET manifest publishing — the (CommonJS) scanner + a publish workflow that
-# runs it in csharp mode and serves src-manifest.json from main root (like
-# served-from-source), so the Structure tab can fetch a C# repo's file tree.
+# runs it in csharp mode, commits src-manifest.json to main and publishes the
+# generated files alone to gh-pages, which is what Pages serves, so the
+# Structure tab can fetch a C# repo's file tree without the repo's source
+# being served beside it.
 # Added to all three .NET shapes; repo-only stays manifest-less. The template
 # stores the workflow as manifest-dotnet.yml and onboard writes it into the
 # target as plain manifest.yml (the SRC>DEST rename, same as test-dotnet.yml).
@@ -277,8 +279,8 @@ ni_read_secret() {
   read -rs "$__niv"
 }
 # enable_pages_main_root "<label suffix>" — enable GitHub Pages serving from
-# main/root (served-from-source and the .NET/SQL manifest shapes, which commit
-# src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
+# main/root (served-from-source, whose site IS main's root, and the SQL manifest
+# shape, which commits src-manifest.json to main). A repo with no Pages site yet needs POST to CREATE
 # it — PUT only UPDATES an existing site and 404s when there is none, which was
 # the "FAILED Pages source config" cause on fresh onboards. POST creates the site
 # WITH the source set; a 409 means it already exists (already enabled), so that's
@@ -295,6 +297,73 @@ enable_pages_main_root() {
     return 0
   fi
   echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> main / root)"
+  echo "         ${c_dim}${__out}${c_rst}"
+  return 0
+}
+# ensure_pages_branch — make sure the target has a gh-pages branch for Pages to
+# serve. An existing branch is left alone (its workflow keeps it current). A
+# missing one is created as a single commit holding the manifest outputs the
+# target already has at its root, so a repo being moved off main/root keeps
+# serving the same files with no gap; a fresh repo gets just .nojekyll and its
+# first manifest run fills the rest. Built in a scratch repo and pushed to the
+# target's own remote, so the target clone's index and work tree are untouched.
+# Returns non-zero when the branch could not be created.
+ensure_pages_branch() {
+  local __remote __tmp __f __err="" __rc=0
+  __remote="$(cd "$TARGET" && git remote get-url origin 2>/dev/null)" || return 1
+  [ -n "$__remote" ] || return 1
+  if git ls-remote --exit-code --heads "$__remote" gh-pages >/dev/null 2>&1; then
+    return 0
+  fi
+  __tmp="$(mktemp -d)" || return 1
+  for __f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
+    if [ -f "$TARGET/$__f" ]; then cp "$TARGET/$__f" "$__tmp/$__f"; fi
+  done
+  : > "$__tmp/.nojekyll"
+  __err="$(
+    cd "$__tmp" \
+      && git init -q -b gh-pages \
+      && git add -A \
+      && git -c user.name="claude-onboard[bot]" \
+             -c user.email="claude-onboard@users.noreply.github.com" \
+             commit -q -m "Publish manifest outputs" \
+      && git push -q "$__remote" gh-pages:gh-pages 2>&1 >/dev/null
+  )" || __rc=$?
+  rm -rf "$__tmp"
+  if [ "$__rc" -ne 0 ] && [ -n "$__err" ]; then
+    # The remote URL can carry a token — never echo it.
+    printf '%s\n' "$__err" | sed -E 's#://[^@/ ]+@#://#g' | sed "s/^/         /"
+  fi
+  return "$__rc"
+}
+# enable_pages_gh_pages "<label suffix>" — serve Pages from gh-pages/root (the
+# .NET manifest shapes). A Pages site is public even when the repo is private,
+# so these shapes must not serve main: gh-pages holds only the generated
+# manifest files. POST creates a site that does not exist yet; a 409 means one
+# does — possibly still pointed at main/root by an earlier onboard — so PUT
+# moves its source. The branch is created first, because Pages refuses a source
+# branch that does not exist. Non-fatal like enable_pages_main_root; sets
+# GH_PAGES_DONE on success.
+enable_pages_gh_pages() {
+  local __label="$1" __out __rc=0
+  if ! ensure_pages_branch; then
+    echo "  ${c_red}FAILED${c_rst} creating the gh-pages branch — Pages source left as it was"
+    echo "         ${c_dim}After the first manifest run creates gh-pages: Settings -> Pages -> gh-pages / root${c_rst}"
+    return 0
+  fi
+  __out=$(gh api -X POST "/repos/$REPO_FOR_GH/pages" \
+    -f "source[branch]=gh-pages" -f "source[path]=/" 2>&1) || __rc=$?
+  if [ "$__rc" -ne 0 ] && printf '%s' "$__out" | grep -qiE "409|already exists"; then
+    __rc=0
+    __out=$(gh api -X PUT "/repos/$REPO_FOR_GH/pages" \
+      -f "source[branch]=gh-pages" -f "source[path]=/" 2>&1) || __rc=$?
+  fi
+  if [ "$__rc" -eq 0 ]; then
+    echo "  ${c_grn}set${c_rst}    Pages source: gh-pages branch, root${__label}"
+    GH_PAGES_DONE=true
+    return 0
+  fi
+  echo "  ${c_red}FAILED${c_rst} Pages source config (set manually: Settings -> Pages -> gh-pages / root)"
   echo "         ${c_dim}${__out}${c_rst}"
   return 0
 }
@@ -1468,9 +1537,16 @@ if [ "$USE_GH" = "true" ]; then
       served-from-source)
         enable_pages_main_root ""
         ;;
-      console|desktop|maui|sql)
-        # .NET and SQL shapes publish src-manifest.json to Pages (served from
-        # main root, like served-from-source) so the Structure tab can fetch it.
+      console|desktop|maui)
+        # .NET shapes publish the generated manifest files to gh-pages and
+        # serve Pages from there, so the Structure and Understanding tabs can
+        # fetch them while nothing else on main is served. A repo onboarded
+        # before this is moved off main/root here.
+        enable_pages_gh_pages " (serves the manifest files only)"
+        ;;
+      sql)
+        # The SQL shape publishes src-manifest.json to Pages (served from main
+        # root, like served-from-source) so the Structure tab can fetch it.
         enable_pages_main_root " (serves src-manifest.json)"
         ;;
       repo-only)

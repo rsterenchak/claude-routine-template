@@ -222,7 +222,7 @@ runnable `Main`.
 **Template:** `rsterenchak/template-console`
 
 **Onboarding adds:** `test.yml` (dotnet test on ubuntu), `manifest.yml`,
-`run-capture.yml`. Pages source: `main`, root (manifest only — no app deploy).
+`run-capture.yml`. Pages source: `gh-pages`, root (manifest files only — no app deploy).
 
 **Gotchas**
 - **Exactly one `OutputType=Exe` project.** `run-capture.yml` auto-discovers the

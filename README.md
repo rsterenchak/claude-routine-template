@@ -174,7 +174,8 @@ The worker reads `inject_targets` live (via its `resolveTarget`), so there's not
 
 **9b — GitHub Pages source.** **Settings → Pages → Source: "Deploy from a branch".**
 - **Build-pipeline:** branch `gh-pages`, `/ (root)`.
-- **Served-from-source, .NET (console/desktop/maui), and SQL:** branch `main`, `/ (root)` — Pages serves the committed `src-manifest.json` directly, no build.
+- **Served-from-source and SQL:** branch `main`, `/ (root)` — Pages serves the committed `src-manifest.json` directly, no build.
+- **.NET (console/desktop/maui):** branch `gh-pages`, `/ (root)` — `manifest.yml` publishes the generated manifest files there and nothing else. A Pages site is public even when the repo is private, so these shapes never serve `main`. `onboard.sh` creates the branch and sets this; a repo onboarded earlier is moved by its next refresh.
 - **repo-only:** skip — no manifest to serve.
 
 If Pages was never enabled, the first run may create/commit the manifest but Pages won't serve until you point it here.
@@ -189,7 +190,8 @@ https://<your-username>.github.io/<your-repo>/src-manifest.json
 
 It should return JSON with a `files` array and the right `lens` for your shape (`"ui"` web, `"types"` .NET, `"sql"` SQL — plus a `types`/`tables` array for the latter two). If it 404s:
 - **Build-pipeline:** `deploy.yml` green, right generator variant, build actually output to `dist/` (align generator `MANIFEST_OUT_DIR`, build output dir, and `publish_dir` if your build targets `build/`).
-- **Served-from-source / .NET / SQL:** the `manifest.yml` workflow green and committed `src-manifest.json` to root, Pages serving `main`/root (9b), and `src-manifest.json` **not** in `.gitignore` (it must be committed).
+- **Served-from-source / SQL:** the `manifest.yml` workflow green and committed `src-manifest.json` to root, Pages serving `main`/root (9b), and `src-manifest.json` **not** in `.gitignore` (it must be committed).
+- **.NET:** the `manifest.yml` workflow green through its "Publish manifest outputs to gh-pages" step, a `gh-pages` branch holding `src-manifest.json`, and Pages serving `gh-pages`/root (9b).
 
 ### Step 11 — Test injection end-to-end
 

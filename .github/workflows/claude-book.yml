@@ -314,6 +314,53 @@ jobs:
           if [ "$published" = "1" ]; then echo "published=1" >> "$GITHUB_OUTPUT"; fi
           echo "changed=1" >> "$GITHUB_OUTPUT"
 
+      # .NET shapes serve Pages from the gh-pages branch, which holds only the
+      # generated files (manifest.yml there explains why: a Pages site is public
+      # even for a private repo). The commit above put the regenerated outputs
+      # on main with [skip ci], so manifest.yml will not run for it — publish
+      # the same files to gh-pages here, or the Understanding tab would keep
+      # showing the previous book. Every other shape skips this step.
+      - name: Publish manifest outputs to gh-pages (.NET shapes)
+        if: steps.commit.outputs.published == '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MANIFEST_LANG: '{{MANIFEST_LANG}}'
+        run: |
+          set -euo pipefail
+          if [ "$MANIFEST_LANG" != "csharp" ]; then
+            echo "Not a .NET shape — Pages serves this repo from where it always has."
+            exit 0
+          fi
+          out="$RUNNER_TEMP/pages-out"
+          rm -rf "$out" && mkdir -p "$out"
+          n=0
+          for f in src-manifest.json src-symbols.json src-tours.json src-book.json; do
+            if [ -f "$f" ]; then cp "$f" "$out/$f"; n=$((n+1)); fi
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "No manifest outputs to publish."
+            exit 0
+          fi
+          : > "$out/.nojekyll"
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          cd "$out"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Publish manifest outputs"
+          new_tree="$(git rev-parse 'HEAD^{tree}')"
+          old_tree=""
+          if git fetch -q --depth 1 "$remote" gh-pages 2>/dev/null; then
+            old_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          fi
+          if [ "$new_tree" = "$old_tree" ]; then
+            echo "gh-pages already holds these outputs — nothing to publish."
+            exit 0
+          fi
+          git push -q -f "$remote" gh-pages:gh-pages
+          echo "Published ${n} file(s) to gh-pages."
+
       # Build-pipeline repos publish from dist/ via deploy.yml, which a
       # GITHUB_TOKEN push does not trigger — dispatch it. Root-served repos
       # already got their outputs in the commit above (published=1), so
